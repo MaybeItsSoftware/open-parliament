@@ -128,7 +128,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                   ),
                   itemBuilder: (context, index) {
                     final value = values[index];
-                    final intensity = maxValue == 0 ? 0.0 : value / maxValue;
+                    final intensity = value == 0 || maxValue == 0
+                        ? 0.0
+                        : value / maxValue;
                     return DecoratedBox(
                       decoration: BoxDecoration(
                         color: value == 0
@@ -337,7 +339,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           .map(
             (entry) => _DebateFeedItem(
               title: entry.key,
-              durationLabel: _durationFromWords(entry.value),
+              durationMinutes: _minutesFromWords(entry.value),
             ),
           )
           .toList()
@@ -353,19 +355,19 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return const [
       _DebateFeedItem(
         title: 'Healthcare Reform Bill: Second Reading',
-        durationLabel: '3h 15m',
+        durationMinutes: 195,
       ),
       _DebateFeedItem(
         title: 'National Infrastructure and Transport Funding',
-        durationLabel: '2h 40m',
+        durationMinutes: 160,
       ),
       _DebateFeedItem(
         title: 'Education Standards and School Accountability',
-        durationLabel: '1h 55m',
+        durationMinutes: 115,
       ),
       _DebateFeedItem(
         title: 'Energy Security and Household Costs',
-        durationLabel: '1h 30m',
+        durationMinutes: 90,
       ),
     ];
   }
@@ -382,10 +384,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return _wordRegex.allMatches(text).length;
   }
 
-  static String _durationFromWords(int words) {
-    final minutes = (words / _averageWordsPerMinute)
+  static int _minutesFromWords(int words) {
+    return (words / _averageWordsPerMinute)
         .round()
         .clamp(1, _maxDurationMinutes);
+  }
+
+  static String _durationLabelFromMinutes(int minutes) {
     final hoursPart = minutes ~/ 60;
     final minutesPart = minutes % 60;
     if (hoursPart == 0) return '${minutesPart}m';
@@ -421,20 +426,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
 class _DebateFeedItem {
   final String title;
-  final String durationLabel;
-  static final RegExp _hoursRegex = RegExp(r'(\d+)h');
-  static final RegExp _minsRegex = RegExp(r'(\d+)m');
+  final int durationMinutes;
 
   const _DebateFeedItem({
     required this.title,
-    required this.durationLabel,
+    required this.durationMinutes,
   });
 
-  int get durationMinutes {
-    final hoursMatch = _hoursRegex.firstMatch(durationLabel);
-    final minsMatch = _minsRegex.firstMatch(durationLabel);
-    final hours = int.tryParse(hoursMatch?.group(1) ?? '0') ?? 0;
-    final mins = int.tryParse(minsMatch?.group(1) ?? '0') ?? 0;
-    return (hours * 60) + mins;
-  }
+  String get durationLabel =>
+      _DateSelectorViewState._durationLabelFromMinutes(durationMinutes);
 }
