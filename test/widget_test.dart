@@ -14,7 +14,7 @@ void main() {
     await tester.pumpWidget(const OpenHansardApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('ParliamentPulse'), findsOneWidget);
+    expect(find.text('Open Hansard'), findsOneWidget);
     expect(find.text('Chamber Activity Pulse'), findsOneWidget);
     expect(find.text('Today’s Key Debates'), findsOneWidget);
   });

@@ -85,7 +85,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         const SizedBox(width: 12),
         Expanded(
           child: Text(
-            'ParliamentPulse',
+            'Open Hansard',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
