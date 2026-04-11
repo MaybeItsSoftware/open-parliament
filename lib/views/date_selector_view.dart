@@ -22,6 +22,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   static const int _averageWordsPerMinute = 130;
   static const int _maxDebateItems = 8;
   static const int _maxDurationMinutes = 24 * 60;
+  static const int _maxDateSearchDays = 14;
   static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
@@ -257,7 +258,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     var guard = 0;
     while (!vm.isSittingDay(adjusted) &&
         adjusted.isAfter(_minDate) &&
-        guard < 14) {
+        guard < _maxDateSearchDays) {
       adjusted = adjusted.subtract(const Duration(days: 1));
       guard++;
     }
@@ -274,7 +275,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     do {
       next = next.add(Duration(days: deltaDays));
       guard++;
-    } while (!vm.isSittingDay(next) && next.isAfter(_minDate) && guard < 14);
+    } while (!vm.isSittingDay(next) &&
+        next.isAfter(_minDate) &&
+        guard < _maxDateSearchDays);
 
     if (next.isAfter(today) || !vm.isSittingDay(next)) return;
     vm.setFocusedDay(next);
@@ -390,14 +393,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         .clamp(1, _maxDurationMinutes);
   }
 
-  static String _durationLabelFromMinutes(int minutes) {
-    final hoursPart = minutes ~/ 60;
-    final minutesPart = minutes % 60;
-    if (hoursPart == 0) return '${minutesPart}m';
-    if (minutesPart == 0) return '${hoursPart}h';
-    return '${hoursPart}h ${minutesPart}m';
-  }
-
   void _navigateToTranscript(DateTime day) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -433,6 +428,13 @@ class _DebateFeedItem {
     required this.durationMinutes,
   });
 
-  String get durationLabel =>
-      _DateSelectorViewState._durationLabelFromMinutes(durationMinutes);
+  String get durationLabel => _durationLabelFromMinutes(durationMinutes);
+
+  static String _durationLabelFromMinutes(int minutes) {
+    final hoursPart = minutes ~/ 60;
+    final minutesPart = minutes % 60;
+    if (hoursPart == 0) return '${minutesPart}m';
+    if (minutesPart == 0) return '${hoursPart}h';
+    return '${hoursPart}h ${minutesPart}m';
+  }
 }
