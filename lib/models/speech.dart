@@ -31,30 +31,27 @@ class Speech {
     required String debateTitle,
     required int orderIndex,
   }) {
-    final attribution = (json['AttributedTo'] as String?) ??
-        (json['attributedTo'] as String?) ??
+    final attribution = _asString(json['AttributedTo']) ??
+        _asString(json['attributedTo']) ??
         '';
-    final memberName = (json['MemberName'] as String?) ??
-        (json['memberName'] as String?) ??
+    final memberName = _asString(json['MemberName']) ??
+        _asString(json['memberName']) ??
         attribution.split('(').first.trim();
     final rawMemberId = json['MemberId'] ?? json['memberId'];
-
-    final rawText =
-        (json['Value'] as String?) ?? (json['value'] as String?) ?? '';
+    final rawText = _asString(json['Value']) ?? _asString(json['value']) ?? '';
+    final parsedMemberId = _asInt(rawMemberId);
 
     return Speech(
-      id: (json['ItemId'] as String?) ??
-          (json['id'] as String?) ??
+      id: _asString(json['ItemId']) ??
+          _asString(json['id']) ??
           '${debateId}_$orderIndex',
       debateId: debateId,
       debateTitle: debateTitle,
-      memberId:
-          rawMemberId != null ? (rawMemberId as num).toInt() : null,
+      memberId: parsedMemberId,
       memberName: memberName,
       attributedTo: attribution,
       speechText: _stripHtml(rawText),
-      timecode:
-          (json['Timecode'] as String?) ?? (json['timecode'] as String?),
+      timecode: _asString(json['Timecode']) ?? _asString(json['timecode']),
       orderIndex: orderIndex,
     );
   }
@@ -102,6 +99,19 @@ class Speech {
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     return text;
+  }
+
+  static String? _asString(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value;
+    return value.toString();
+  }
+
+  static int? _asInt(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   @override

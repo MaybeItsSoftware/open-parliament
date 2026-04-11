@@ -85,8 +85,8 @@ void main() {
       final members = await service.fetchAllMembers();
 
       expect(members, hasLength(3));
-      expect(members.map((m) => m.name),
-          containsAll(['Alice', 'Bob', 'Charlie']));
+      expect(
+          members.map((m) => m.name), containsAll(['Alice', 'Bob', 'Charlie']));
     });
 
     test('fetchAllMembers returns empty list on HTTP error', () async {
@@ -124,26 +124,47 @@ void main() {
   // ─── HansardApiService tests ─────────────────────────────────────────────
 
   group('HansardApiService', () {
-    test('fetchSittingDebates parses array response', () async {
+    test('fetchSittingDebates builds debates from overview endpoints',
+        () async {
       final stub = _StubHttpClient([
+        // /overview/sectionsforday.json
+        _jsonResponse(['Debate']),
+        // /overview/sectiontrees.json
         _jsonResponse([
-          {'ExternalId': 'abc', 'Title': 'PMQs', 'House': 'Commons'},
-          {'ExternalId': 'def', 'Title': 'Statements', 'House': 'Commons'},
+          {
+            'Title': 'Commons Chamber',
+            'SectionTreeItems': [
+              {
+                'ParentId': null,
+                'ExternalId': 'abc',
+                'Title': 'Commons Chamber',
+              },
+            ],
+          },
         ]),
+        // Lords sections
+        _jsonResponse([]),
       ]);
 
       final service = HansardApiService(client: stub);
       final debates = await service.fetchSittingDebates('2024-11-04');
 
-      expect(debates, hasLength(2));
+      expect(debates, hasLength(1));
       expect(debates[0].id, 'abc');
-      expect(debates[0].title, 'PMQs');
-      expect(debates[1].id, 'def');
+      expect(debates[0].title, 'Commons Chamber');
+      expect(debates[0].house, 'Commons');
     });
 
-    test('fetchSittingDebates throws HansardApiException on HTTP error',
-        () async {
+    test('fetchSittingDebates returns empty list on 404', () async {
       final stub = _StubHttpClient([http.Response('', 404)]);
+      final service = HansardApiService(client: stub);
+      final debates = await service.fetchSittingDebates('2024-11-04');
+      expect(debates, isEmpty);
+    });
+
+    test('fetchSittingDebates throws HansardApiException on non-404 error',
+        () async {
+      final stub = _StubHttpClient([http.Response('', 500)]);
       final service = HansardApiService(client: stub);
 
       await expectLater(
@@ -152,32 +173,48 @@ void main() {
       );
     });
 
-    test('fetchDebateSpeeches parses Items array', () async {
+    test('fetchDebateSpeeches parses nested ChildDebates Items', () async {
       final stub = _StubHttpClient([
         _jsonResponse({
-          'Items': [
+          'Overview': {'ExtId': 'root', 'Title': 'Commons Chamber'},
+          'Items': [],
+          'ChildDebates': [
             {
-              'ItemId': 'item-1',
-              'MemberId': 172,
-              'MemberName': 'Adam Smith',
-              'AttributedTo': 'Adam Smith (Labour)',
-              'Value': '<p>I thank the Minister.</p>',
-              'Timecode': '10:00:00',
+              'Overview': {'ExtId': 'abc', 'Title': 'PMQs'},
+              'Items': [
+                {
+                  'ItemId': 'item-1',
+                  'MemberId': 172,
+                  'MemberName': 'Adam Smith',
+                  'AttributedTo': 'Adam Smith (Labour)',
+                  'Value': '<p>I thank the Minister.</p>',
+                  'Timecode': '10:00:00',
+                },
+              ],
+              'ChildDebates': [],
             },
           ],
         }),
       ]);
 
       final service = HansardApiService(client: stub);
-      final speeches =
-          await service.fetchDebateSpeeches('abc', 'PMQs');
+      final speeches = await service.fetchDebateSpeeches('abc', 'PMQs');
 
       expect(speeches, hasLength(1));
       expect(speeches[0].id, 'item-1');
+      expect(speeches[0].debateId, 'abc');
+      expect(speeches[0].debateTitle, 'PMQs');
       expect(speeches[0].memberId, 172);
       expect(speeches[0].memberName, 'Adam Smith');
       expect(speeches[0].speechText, isNot(contains('<p>')));
       expect(speeches[0].speechText, contains('I thank the Minister.'));
+    });
+
+    test('fetchDebateSpeeches returns empty list on 404', () async {
+      final stub = _StubHttpClient([http.Response('', 404)]);
+      final service = HansardApiService(client: stub);
+      final speeches = await service.fetchDebateSpeeches('abc', 'PMQs');
+      expect(speeches, isEmpty);
     });
 
     test('fetchDebateSpeeches throws HansardApiException on HTTP error',

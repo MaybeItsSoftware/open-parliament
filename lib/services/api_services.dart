@@ -68,10 +68,10 @@ class MembersApiService {
 
 /// Low-level HTTP client for the official Hansard API.
 ///
-/// Primary:  https://hansard-api.parliament.uk/v1/sittings/{date}.json
-/// Fallback: https://hansard-api.parliament.uk/v1/debates/debate/{id}.json
+/// Primary:  https://hansard-api.parliament.uk/overview/sectionsforday.json
+/// Fallback: https://hansard-api.parliament.uk/debates/debate/{id}.json
 class HansardApiService {
-  static const String _baseUrl = 'https://hansard-api.parliament.uk/v1';
+  static const String _baseUrl = 'https://hansard-api.parliament.uk';
 
   final http.Client _client;
 
@@ -79,52 +79,106 @@ class HansardApiService {
 
   /// Fetches the list of debate sections for [date] (YYYY-MM-DD).
   ///
-  /// Uses the primary endpoint `/v1/sittings/{date}.json` as specified.
-  /// If [house] is provided it is appended as a path segment to scope the
-  /// results (e.g. `Commons` or `Lords`), which is the common real-world
-  /// format.  Omit [house] to use the bare spec URL.
+  /// Uses the Overview endpoints to discover available sections and their
+  /// root debate IDs for the given day and house.
   ///
-  /// The sittings endpoint returns a list of top-level debate sections, each
-  /// with an `ExternalId` used to fetch full speech content.
+  /// Returns a list of top-level debate roots, each with an `ExternalId` used
+  /// to fetch full speech content.
   Future<List<Debate>> fetchSittingDebates(
     String date, {
     String? house,
   }) async {
-    final path = house != null
-        ? '$_baseUrl/sittings/$house/$date.json'
-        : '$_baseUrl/sittings/$date.json';
-    final uri = Uri.parse(path);
-    final response = await _client.get(
-      uri,
-      headers: {'Accept': 'application/json'},
-    );
-
-    if (response.statusCode != 200) {
-      throw HansardApiException(
-        'Failed to fetch sittings for $date: HTTP ${response.statusCode}',
-      );
-    }
-
-    final dynamic raw = jsonDecode(response.body);
-
-    // The endpoint may return a JSON array or a wrapped object.
-    final List<dynamic> items;
-    if (raw is List<dynamic>) {
-      items = raw;
-    } else if (raw is Map<String, dynamic>) {
-      items = (raw['Response'] as List<dynamic>?) ?? [];
-    } else {
-      items = [];
-    }
-
+    final houses =
+        house != null ? <String>[house] : <String>['Commons', 'Lords'];
     final debates = <Debate>[];
-    for (int i = 0; i < items.length; i++) {
-      try {
-        debates.add(
-          Debate.fromApiJson(items[i] as Map<String, dynamic>, orderIndex: i),
+    int orderIndex = 0;
+
+    for (final currentHouse in houses) {
+      final sectionsUri = Uri.parse(
+        '$_baseUrl/overview/sectionsforday.json',
+      ).replace(
+        queryParameters: {'house': currentHouse, 'date': date},
+      );
+      final sectionsResponse = await _client.get(
+        sectionsUri,
+        headers: {'Accept': 'application/json'},
+      );
+
+      // 404 means no data for the selected date/house.
+      if (sectionsResponse.statusCode == 404) {
+        continue;
+      }
+      if (sectionsResponse.statusCode != 200) {
+        throw HansardApiException(
+          'Failed to fetch sections for $date ($currentHouse): '
+          'HTTP ${sectionsResponse.statusCode}',
         );
-      } catch (_) {
-        // Skip malformed debate entries.
+      }
+
+      final sectionsRaw = jsonDecode(sectionsResponse.body);
+      final sections = sectionsRaw is List
+          ? sectionsRaw.whereType<String>().toList()
+          : const <String>[];
+
+      for (final section in sections) {
+        final treeUri = Uri.parse(
+          '$_baseUrl/overview/sectiontrees.json',
+        ).replace(
+          queryParameters: {
+            'house': currentHouse,
+            'date': date,
+            'section': section,
+          },
+        );
+        final treeResponse = await _client.get(
+          treeUri,
+          headers: {'Accept': 'application/json'},
+        );
+
+        if (treeResponse.statusCode == 404) {
+          continue;
+        }
+        if (treeResponse.statusCode != 200) {
+          throw HansardApiException(
+            'Failed to fetch section tree for $date ($currentHouse/$section): '
+            'HTTP ${treeResponse.statusCode}',
+          );
+        }
+
+        final treeRaw = jsonDecode(treeResponse.body);
+        final treeItems =
+            treeRaw is List<dynamic> ? treeRaw : const <dynamic>[];
+
+        for (final treeItem in treeItems) {
+          if (treeItem is! Map<String, dynamic>) {
+            continue;
+          }
+
+          final rootSection = _extractRootSectionNode(treeItem);
+          if (rootSection == null) {
+            continue;
+          }
+
+          final debateId = (rootSection['ExternalId'] as String?) ??
+              (rootSection['externalId'] as String?) ??
+              '';
+          if (debateId.isEmpty) {
+            continue;
+          }
+
+          final title = (rootSection['Title'] as String?) ??
+              (treeItem['Title'] as String?) ??
+              section;
+
+          debates.add(
+            Debate(
+              id: debateId,
+              title: title,
+              house: currentHouse,
+              orderIndex: orderIndex++,
+            ),
+          );
+        }
       }
     }
     return debates;
@@ -141,6 +195,9 @@ class HansardApiService {
       headers: {'Accept': 'application/json'},
     );
 
+    if (response.statusCode == 404) {
+      return const <Speech>[];
+    }
     if (response.statusCode != 200) {
       throw HansardApiException(
         'Failed to fetch debate $debateId: HTTP ${response.statusCode}',
@@ -148,32 +205,89 @@ class HansardApiService {
     }
 
     final body = jsonDecode(response.body) as Map<String, dynamic>;
-
-    // Speeches are in an `Items` array at the top level or nested under
-    // `Overview` / `Contributions` depending on API version.
-    final List<dynamic> items = (body['Items'] as List<dynamic>?) ??
-        (body['items'] as List<dynamic>?) ??
-        [];
-
     final speeches = <Speech>[];
-    for (int i = 0; i < items.length; i++) {
-      try {
+    int orderIndex = 0;
+
+    void collectFromNode(
+      Map<String, dynamic> node, {
+      required String fallbackDebateId,
+      required String fallbackDebateTitle,
+    }) {
+      final overview = node['Overview'] as Map<String, dynamic>?;
+      final nodeDebateId = (overview?['ExtId'] as String?) ??
+          (overview?['ExternalId'] as String?) ??
+          fallbackDebateId;
+      final nodeDebateTitle =
+          (overview?['Title'] as String?) ?? fallbackDebateTitle;
+
+      final items = (node['Items'] as List<dynamic>?) ?? const <dynamic>[];
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) {
+          continue;
+        }
         speeches.add(
           Speech.fromApiJson(
-            items[i] as Map<String, dynamic>,
-            debateId: debateId,
-            debateTitle: debateTitle,
-            orderIndex: i,
+            item,
+            debateId: nodeDebateId,
+            debateTitle: nodeDebateTitle,
+            orderIndex: orderIndex++,
           ),
         );
-      } catch (_) {
-        // Skip malformed individual contributions.
+      }
+
+      final childDebates =
+          (node['ChildDebates'] as List<dynamic>?) ?? const <dynamic>[];
+      for (final child in childDebates) {
+        if (child is! Map<String, dynamic>) {
+          continue;
+        }
+        collectFromNode(
+          child,
+          fallbackDebateId: nodeDebateId,
+          fallbackDebateTitle: nodeDebateTitle,
+        );
       }
     }
+
+    collectFromNode(
+      body,
+      fallbackDebateId: debateId,
+      fallbackDebateTitle: debateTitle,
+    );
     return speeches;
   }
 
   void dispose() => _client.close();
+
+  Map<String, dynamic>? _extractRootSectionNode(Map<String, dynamic> treeItem) {
+    final sectionTreeItems = treeItem['SectionTreeItems'];
+    if (sectionTreeItems is! List<dynamic> || sectionTreeItems.isEmpty) {
+      return null;
+    }
+
+    for (final item in sectionTreeItems) {
+      if (item is! Map<String, dynamic>) {
+        continue;
+      }
+      final parentId = item['ParentId'];
+      final externalId = item['ExternalId'] ?? item['externalId'];
+      if (parentId == null && externalId is String && externalId.isNotEmpty) {
+        return item;
+      }
+    }
+
+    // Fallback to the first node that has an ExternalId.
+    for (final item in sectionTreeItems) {
+      if (item is! Map<String, dynamic>) {
+        continue;
+      }
+      final externalId = item['ExternalId'] ?? item['externalId'];
+      if (externalId is String && externalId.isNotEmpty) {
+        return item;
+      }
+    }
+    return null;
+  }
 }
 
 /// Exception thrown when a Hansard API request fails.

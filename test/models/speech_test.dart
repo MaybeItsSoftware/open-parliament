@@ -87,6 +87,22 @@ void main() {
       expect(speech.memberName, 'Jane Doe');
     });
 
+    test('fromApiJson accepts numeric ItemId and string MemberId', () {
+      final json = {
+        'ItemId': 48456144,
+        'MemberId': '172',
+        'Value': 'Some text',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 0,
+      );
+      expect(speech.id, '48456144');
+      expect(speech.memberId, 172);
+    });
+
     test('toDb / fromDb round-trip preserves all fields', () {
       const speech = Speech(
         id: 'sp-1',
