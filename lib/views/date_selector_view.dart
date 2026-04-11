@@ -19,6 +19,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   static const Color _pulseMaxColor = Color(0xFF005EA5);
   static const Color _pulseMinColor = Color(0xFFE2E5EA);
   static const DateTime _minDate = DateTime(2000, 1, 1);
+  static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
   void initState() {
@@ -375,8 +376,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 
   static int _wordCount(String text) {
-    final matches = RegExp(r'\S+').allMatches(text);
-    return matches.length;
+    return _wordRegex.allMatches(text).length;
   }
 
   static String _durationFromWords(int words) {
