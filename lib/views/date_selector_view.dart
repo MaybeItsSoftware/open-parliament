@@ -19,6 +19,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   static const Color _pulseMaxColor = Color(0xFF005EA5);
   static const Color _pulseMinColor = Color(0xFFE2E5EA);
   static const DateTime _minDate = DateTime(2000, 1, 1);
+  static const int _averageWordsPerMinute = 130;
+  static const int _maxDebateItems = 8;
+  static const int _maxDurationMinutes = 24 * 60;
   static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
@@ -243,7 +246,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final picked = await showDatePicker(
       context: context,
       initialDate: selectedDay,
-      firstDate: DateTime(2000),
+      firstDate: _minDate,
       lastDate: DateTime(now.year, now.month, now.day),
     );
     if (picked == null) return;
@@ -340,7 +343,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           .toList()
         ..sort((a, b) => b.durationMinutes.compareTo(a.durationMinutes));
 
-      return items.take(8).toList();
+      return items.take(_maxDebateItems).toList();
     } catch (_) {
       return _fallbackDebates();
     }
@@ -380,8 +383,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 
   static String _durationFromWords(int words) {
-    const wordsPerMinute = 130;
-    final minutes = (words / wordsPerMinute).round().clamp(1, 24 * 60);
+    final minutes = (words / _averageWordsPerMinute)
+        .round()
+        .clamp(1, _maxDurationMinutes);
     final hoursPart = minutes ~/ 60;
     final minutesPart = minutes % 60;
     if (hoursPart == 0) return '${minutesPart}m';
