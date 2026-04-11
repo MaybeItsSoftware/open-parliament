@@ -1,0 +1,39 @@
+name: open_hansard
+description: Mobile app for reading UK Parliamentary debates verbatim from Hansard.
+version: 1.0.0+1
+publish_to: none
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP requests to Parliament APIs
+  http: ^1.2.0
+
+  # Local SQLite storage (local-first data strategy)
+  sqflite: ^2.3.3
+  path_provider: ^2.1.2
+  path: ^1.9.0
+
+  # Portrait image caching to disk
+  cached_network_image: ^3.3.1
+
+  # State management
+  provider: ^6.1.2
+
+  # Calendar date picker for sitting days
+  table_calendar: ^3.1.2
+
+  # Scroll to specific item by index (Jump-to-Member feature)
+  scrollable_positioned_list: ^0.3.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
