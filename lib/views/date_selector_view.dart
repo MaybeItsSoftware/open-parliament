@@ -18,6 +18,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
   static const Color _pulseMaxColor = Color(0xFF005EA5);
   static const Color _pulseMinColor = Color(0xFFE2E5EA);
+  static const DateTime _minDate = DateTime(2000, 1, 1);
 
   @override
   void initState() {
@@ -247,9 +248,14 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     if (picked == null) return;
 
     var adjusted = DateTime(picked.year, picked.month, picked.day);
-    while (!vm.isSittingDay(adjusted)) {
+    var guard = 0;
+    while (!vm.isSittingDay(adjusted) &&
+        adjusted.isAfter(_minDate) &&
+        guard < 14) {
       adjusted = adjusted.subtract(const Duration(days: 1));
+      guard++;
     }
+    if (!vm.isSittingDay(adjusted)) return;
     vm.setFocusedDay(adjusted);
     vm.selectDay(adjusted);
   }
@@ -258,11 +264,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     var next = current;
+    var guard = 0;
     do {
       next = next.add(Duration(days: deltaDays));
-    } while (!vm.isSittingDay(next));
+      guard++;
+    } while (!vm.isSittingDay(next) && next.isAfter(_minDate) && guard < 14);
 
-    if (next.isAfter(today)) return;
+    if (next.isAfter(today) || !vm.isSittingDay(next)) return;
     vm.setFocusedDay(next);
     vm.selectDay(next);
   }
@@ -273,32 +281,26 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   ) async {
     final service = context.read<ParliamentaryDataService>();
     final days = _last28Days(anchorDate);
-    final values = <int>[];
-
-    for (final day in days) {
+    return Future.wait(days.map((day) async {
       if (!vm.isSittingDay(day)) {
-        values.add(0);
-        continue;
+        return 0;
       }
       final date = DateSelectorViewModel.formatDate(day);
       final isCached = await vm.isCached(day);
       if (!isCached) {
-        values.add(0);
-        continue;
+        return 0;
       }
 
       try {
         final speeches = await service.getSpeeches(date);
-        final words = speeches.fold<int>(
+        return speeches.fold<int>(
           0,
           (sum, speech) => sum + _wordCount(speech.speechText),
         );
-        values.add(words);
       } catch (_) {
-        values.add(0);
+        return 0;
       }
-    }
-    return values;
+    }));
   }
 
   Future<List<_DebateFeedItem>> _loadDebatesFeed(
@@ -383,6 +385,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final hoursPart = minutes ~/ 60;
     final minutesPart = minutes % 60;
     if (hoursPart == 0) return '${minutesPart}m';
+    if (minutesPart == 0) return '${hoursPart}h';
     return '${hoursPart}h ${minutesPart}m';
   }
 
@@ -415,6 +418,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 class _DebateFeedItem {
   final String title;
   final String durationLabel;
+  static final RegExp _hoursRegex = RegExp(r'(\d+)h');
+  static final RegExp _minsRegex = RegExp(r'(\d+)m');
 
   const _DebateFeedItem({
     required this.title,
@@ -422,8 +427,8 @@ class _DebateFeedItem {
   });
 
   int get durationMinutes {
-    final hoursMatch = RegExp(r'(\d+)h').firstMatch(durationLabel);
-    final minsMatch = RegExp(r'(\d+)m').firstMatch(durationLabel);
+    final hoursMatch = _hoursRegex.firstMatch(durationLabel);
+    final minsMatch = _minsRegex.firstMatch(durationLabel);
     final hours = int.tryParse(hoursMatch?.group(1) ?? '0') ?? 0;
     final mins = int.tryParse(minsMatch?.group(1) ?? '0') ?? 0;
     return (hours * 60) + mins;
