@@ -120,7 +120,7 @@ class ParliamentaryDataService {
   /// Fetches a single member from the Members API and stores them in the local
   /// members DB.
   ///
-  /// Use this when a [memberId] is known from the Hansard API but is absent
+  /// Use this when an [id] is known from the Hansard API but is absent
   /// from the local cache — for example, former MPs who left Parliament after
   /// the last full member sync, or newly elected members.
   ///

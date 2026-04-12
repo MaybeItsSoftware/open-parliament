@@ -51,6 +51,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<List<Member>> getMembers() async => membersResult;
 
   @override
+  Future<Member?> fetchAndCacheMemberById(int id) async => memberResults[id];
+
+  @override
   Future<Map<String, int>> getSpeakerAliasMemberIds(
     Iterable<String> aliasKeys,
   ) async {
@@ -71,6 +74,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<List<Debate>> getDebatesForDate(String date) async => const [];
+
+  @override
+  Future<int> wipeDebateCache() async => 0;
 
   @override
   void dispose() {}

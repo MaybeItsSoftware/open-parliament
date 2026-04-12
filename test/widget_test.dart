@@ -8,10 +8,13 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:open_hansard/main.dart';
+import 'package:open_hansard/services/theme_service.dart';
 
 void main() {
   testWidgets('Landing page renders redesigned main view', (tester) async {
-    await tester.pumpWidget(const OpenHansardApp());
+    final themeService = ThemeService();
+    await themeService.load();
+    await tester.pumpWidget(OpenHansardApp(themeService: themeService));
     await tester.pumpAndSettle();
 
     expect(find.text('Open Hansard'), findsOneWidget);
