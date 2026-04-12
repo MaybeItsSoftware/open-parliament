@@ -52,10 +52,9 @@ class MembersApiService {
         }
       }
 
-      skip += pageSize;
-
       final totalResults = (body['totalResults'] as num?)?.toInt() ?? 0;
-      if (skip >= totalResults) {
+      skip += items.length;
+      if (members.length >= totalResults || items.length < pageSize) {
         break;
       }
     }
