@@ -27,8 +27,10 @@ class SpeakerEntry {
 class TranscriptViewModel extends ChangeNotifier {
   final ParliamentaryDataService _service;
   final String date;
+  /// When set, only speeches belonging to this root debate are shown.
+  final String? initialDebateId;
 
-  TranscriptViewModel(this._service, {required this.date});
+  TranscriptViewModel(this._service, {required this.date, this.initialDebateId});
 
   List<Speech> _speeches = [];
   final Map<int, Member> _memberCache = {};
@@ -36,6 +38,8 @@ class TranscriptViewModel extends ChangeNotifier {
   List<SpeakerEntry> _speakers = [];
   final List<_TimeAnchor> _timeAnchors = [];
   String? _primaryDebateTitle;
+  /// "Commons", "Lords", "Commons & Lords", or null if unknown.
+  String? _primaryHouse;
   bool _isLoading = false;
   String? _error;
   bool _isDisposed = false;
@@ -44,6 +48,7 @@ class TranscriptViewModel extends ChangeNotifier {
   Map<int, Member> get memberCache => Map.unmodifiable(_memberCache);
   List<SpeakerEntry> get speakers => List.unmodifiable(_speakers);
   String? get primaryDebateTitle => _primaryDebateTitle;
+  String? get primaryHouse => _primaryHouse;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
@@ -54,9 +59,17 @@ class TranscriptViewModel extends ChangeNotifier {
     if (!_isDisposed) notifyListeners();
 
     try {
-      final rawSpeeches = await _service.getSpeeches(date);
+      final allRawSpeeches = await _service.getSpeeches(date);
+      final debates = await _service.getDebatesForDate(date);
+      final rootIds = debates.map((d) => d.id).toSet();
+
+      final rawSpeeches = initialDebateId != null
+          ? _speechesForRootDebate(allRawSpeeches, rootIds, initialDebateId!)
+          : allRawSpeeches;
+
       _speeches = _normaliseSpeeches(rawSpeeches);
       _primaryDebateTitle = _computePrimaryDebateTitle(_speeches);
+      _primaryHouse = await _computePrimaryHouse();
       await _loadMemberProfiles();
       _buildSpeakersIndex();
     } catch (e) {
@@ -65,6 +78,14 @@ class TranscriptViewModel extends ChangeNotifier {
       _isLoading = false;
       if (!_isDisposed) notifyListeners();
     }
+  }
+
+  /// Returns the index of the first speech belonging to [debateId], or null.
+  int? firstIndexForDebate(String debateId) {
+    for (int i = 0; i < _speeches.length; i++) {
+      if (_speeches[i].debateId == debateId) return i;
+    }
+    return null;
   }
 
   /// Returns the [Member] associated with [memberId], or `null` if unknown.
@@ -165,7 +186,8 @@ class TranscriptViewModel extends ChangeNotifier {
 
     for (final id in ids) {
       if (!_memberCache.containsKey(id)) {
-        final member = await _service.getMemberById(id);
+        var member = await _service.getMemberById(id);
+        member ??= await _service.fetchAndCacheMemberById(id);
         if (member != null) {
           _memberCache[id] = member;
         }
@@ -191,10 +213,24 @@ class TranscriptViewModel extends ChangeNotifier {
       }
     }
 
+    // Resolve "in the Chair" procedural speeches by name matching.
+    for (final speech in _speeches) {
+      final chairName = speech.inChairName;
+      if (chairName == null) continue;
+      final match = lookup.matchExact([chairName]) ??
+          lookup.matchFuzzy([chairName]);
+      if (match != null) {
+        _speechMemberCache[speech.id] = match;
+        _memberCache[match.id] = match;
+      }
+    }
+
     final cachedAliases = await _service.getSpeakerAliasMemberIds(aliasKeys);
 
     for (final speech in _speeches) {
-      if (speech.memberId != null || !speech.hasNamedSpeaker) continue;
+      final hasDirectMatch = speech.memberId != null &&
+          _memberCache.containsKey(speech.memberId!);
+      if (hasDirectMatch || !speech.hasNamedSpeaker) continue;
 
       final partyHint = _partyHintForSpeech(speech);
       final keysForSpeech = _aliasKeysForSpeech(speech);
@@ -321,7 +357,11 @@ class TranscriptViewModel extends ChangeNotifier {
     int i = startIndex + 1;
     while (i < raw.length) {
       final next = raw[i];
-      if (!next.isProceduralText || next.isTimestamp) break;
+      if (next.isTimestamp) break;
+      // Roster lines often have attribution set, so check for the † dagger
+      // symbol as a reliable marker rather than relying on isProceduralText.
+      final isRosterLine = next.speechText.trimLeft().startsWith('†');
+      if (!next.isProceduralText && !isRosterLine) break;
       final text = next.speechText.trim();
       if (text.isEmpty) {
         i++;
@@ -401,6 +441,61 @@ class TranscriptViewModel extends ChangeNotifier {
     return sorted.first.key;
   }
 
+  /// Filters [speeches] (in order) to only those belonging to [rootDebateId].
+  ///
+  /// Speeches are assigned to root debates by walking in order and tracking
+  /// which root debate was most recently seen — sub-section speeches (whose
+  /// debateId is not in [rootIds]) inherit the previous root debate.
+  static List<Speech> _speechesForRootDebate(
+    List<Speech> speeches,
+    Set<String> rootIds,
+    String rootDebateId,
+  ) {
+    final result = <Speech>[];
+    String? currentRoot;
+    for (final speech in speeches) {
+      if (rootIds.contains(speech.debateId)) {
+        currentRoot = speech.debateId;
+      }
+      if (currentRoot == rootDebateId) {
+        result.add(speech);
+      }
+    }
+    return result;
+  }
+
+  Future<String?> _computePrimaryHouse() async {
+    try {
+      final debates = await _service.getDebatesForDate(date);
+      if (debates.isEmpty) return null;
+      final houseByDebateId = {for (final d in debates) d.id: d.house};
+
+      // Count speeches per house to find the dominant one.
+      final houseCounts = <String, int>{};
+      for (final speech in _speeches) {
+        final house = houseByDebateId[speech.debateId];
+        if (house != null && house.isNotEmpty) {
+          houseCounts[house] = (houseCounts[house] ?? 0) + 1;
+        }
+      }
+
+      if (houseCounts.isEmpty) {
+        // Fall back to distinct house values from debates.
+        final houses = debates.map((d) => d.house).toSet();
+        return houses.length == 1 ? houses.first : null;
+      }
+      if (houseCounts.length == 1) return houseCounts.keys.first;
+
+      final total = houseCounts.values.fold(0, (a, b) => a + b);
+      for (final entry in houseCounts.entries) {
+        if (entry.value / total > 0.7) return entry.key;
+      }
+      return 'Commons & Lords';
+    } catch (_) {
+      return null;
+    }
+  }
+
   Set<String> _redundantDatePhrases() {
     final parsedDate = DateTime.tryParse(date);
     if (parsedDate == null) return const <String>{};
@@ -451,12 +546,14 @@ class TranscriptViewModel extends ChangeNotifier {
   List<String> _nameCandidatesForSpeech(Speech speech) {
     final candidates = <String>[];
     final directName = speech.memberName.trim();
-    if (directName.isNotEmpty) candidates.add(directName);
+    if (directName.isNotEmpty && !_looksLikeOfficeTitle(directName)) {
+      candidates.add(directName);
+    }
 
     final attribution = speech.attributedTo.trim();
     if (attribution.isNotEmpty) {
       final lead = attribution.split('(').first.trim();
-      if (lead.isNotEmpty) candidates.add(lead);
+      if (lead.isNotEmpty && !_looksLikeOfficeTitle(lead)) candidates.add(lead);
       for (final match in RegExp(r'\(([^)]+)\)').allMatches(attribution)) {
         final bracketed = (match.group(1) ?? '').trim();
         if (bracketed.isEmpty) continue;
@@ -470,7 +567,9 @@ class TranscriptViewModel extends ChangeNotifier {
   List<String> _personNameCandidatesForSpeech(Speech speech) {
     final candidates = <String>[];
     final directName = speech.memberName.trim();
-    if (directName.isNotEmpty) candidates.add(directName);
+    if (directName.isNotEmpty && !_looksLikeOfficeTitle(directName)) {
+      candidates.add(directName);
+    }
 
     final attribution = speech.attributedTo.trim();
     for (final match in RegExp(r'\(([^)]+)\)').allMatches(attribution)) {
@@ -518,13 +617,17 @@ class TranscriptViewModel extends ChangeNotifier {
     if (v.startsWith('the ')) return true;
     return v.contains('secretary') ||
         v.contains('minister') ||
+        v.contains('chancellor') ||
         v.contains('whip') ||
         v.contains('spokesperson') ||
         v.contains('attorney') ||
         v.contains('advocate') ||
         v.contains('commissioner') ||
         v.contains('speaker') ||
-        v.contains('captain of');
+        v.contains('captain of') ||
+        v.contains('comptroller') ||
+        v.contains('adjutant') ||
+        v.contains('treasurer of');
   }
 
   String? _partyHintForSpeech(Speech speech) {
@@ -671,6 +774,8 @@ class _MemberLookupIndex {
     }
 
     if (best == null || bestScore < 0.67) return null;
+    // Very high confidence match — return regardless of party hint.
+    if (bestScore >= 0.9) return best.member;
     if (partyHint == null || best.partyToken == null) return best.member;
     if (partyHint == best.partyToken) return best.member;
     return null;
@@ -719,12 +824,23 @@ class _MemberCandidate {
     );
   }
 
+  static const _honorifics = {
+    'rt', 'hon', 'right', 'sir', 'dame', 'dr', 'mr', 'mrs', 'ms', 'prof',
+    'lord', 'lady', 'baron', 'baroness', 'viscount', 'viscountess',
+    'earl', 'countess', 'duke', 'duchess',
+  };
+
   static String normalizeName(String raw) {
-    return raw
+    final base = raw
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z\s]'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
+    final stripped = base
+        .split(' ')
+        .where((t) => t.isNotEmpty && !_honorifics.contains(t))
+        .join(' ');
+    return stripped.isNotEmpty ? stripped : base;
   }
 
   static String? _normalizeParty(String raw) {

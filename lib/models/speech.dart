@@ -105,6 +105,66 @@ class Speech {
         'order_idx': orderIndex,
       };
 
+  /// True when the speech is attributed to a collective/anonymous entity
+  /// rather than a named individual.
+  bool get isCollectiveSpeaker {
+    final a = attributedTo.trim();
+    if (a.isEmpty) return false;
+    return a == 'Hon. Members' ||
+        a == 'Opposition Members' ||
+        a == 'Government Members' ||
+        a == 'Noble Lords' ||
+        a.startsWith('An hon. Member') ||
+        a.startsWith('Several hon. Members') ||
+        a.startsWith('A noble Lord') ||
+        a.startsWith('Noble Lords');
+  }
+
+  /// True when this is a Prayers debate entry (title is "Prayers").
+  bool get isPrayers => debateTitle.trim().toLowerCase() == 'prayers';
+
+  /// True when the text marks a procedural event (verbal vote outcome,
+  /// question put, etc.) without being a named speech.
+  bool get isEventTag {
+    if (hasNamedSpeaker && !isCollectiveSpeaker) return false;
+    final t = speechText.trim();
+    return t.startsWith('Question put') ||
+        t.startsWith('Question agreed') ||
+        t.startsWith('Motion made') ||
+        t.endsWith('agreed to.') ||
+        t.endsWith('negatived.') ||
+        t.endsWith('disagreed to.') ||
+        (t.startsWith('The ') && t.endsWith('was asked—'));
+  }
+
+  /// Extracts the name from a "[Name in the Chair]" procedural line, or null.
+  String? get inChairName {
+    final match =
+        RegExp(r'^\[(.+?)\s+in\s+the\s+[Cc]hair\]$').firstMatch(speechText.trim());
+    return match?.group(1)?.trim();
+  }
+
+  /// True when the speech text is a stage direction / action (e.g. "rose—").
+  ///
+  /// These are attributed to a member but describe a physical action rather
+  /// than spoken words. They end with an em-dash and are very short.
+  bool get isAction {
+    final t = speechText.trim();
+    if (t.isEmpty) return false;
+    if (!t.endsWith('—')) return false;
+    // Must be short — real speeches don't end mid-sentence with an em-dash.
+    if (t.length > 80) return false;
+    return true;
+  }
+
+  /// True when the speech text is a division (vote) result line.
+  ///
+  /// Format from the API: `index|time|ayes|noes|description|result||...`
+  bool get isDivision {
+    final t = speechText.trim();
+    return RegExp(r'^\d+\|\d{1,2}:\d{2}').hasMatch(t);
+  }
+
   bool get hasNamedSpeaker {
     if (memberId != null) return true;
     if (memberName.trim().isNotEmpty) return true;
@@ -120,6 +180,7 @@ class Speech {
   bool get isDateHeading => hrsTag.toLowerCase() == 'hs_date';
   bool get isQuote => hrsTag.toLowerCase() == 'hs_quote';
   bool get isTabledBy => hrsTag.toLowerCase() == 'hs_tabledby';
+  bool get isProcedureOutcome => hrsTag.toLowerCase() == 'hs_procedure';
 
   bool get isProceduralText => !isTimestamp && !hasNamedSpeaker;
 

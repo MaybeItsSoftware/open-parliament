@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../services/parliamentary_data_service.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
+import 'settings_view.dart';
 import 'transcript_view.dart';
 
 /// The redesigned landing screen for the app's main page.
@@ -17,14 +18,9 @@ class DateSelectorView extends StatefulWidget {
 
 class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
-  DateTime? _lastPulseAnchorDate;
-  int _pulseSlideDirection = 1;
 
-  static const Color _pulseMaxColor = Color(0xFF005EA5);
-  static const Color _pulseMinColor = Color(0xFFE2E5EA);
   static final DateTime _minDate = DateTime(2000, 1, 1);
   static const int _averageWordsPerMinute = 130;
-  static const int _maxDebateItems = 8;
   static const int _maxDurationMinutes = 24 * 60;
   static final RegExp _wordRegex = RegExp(r'\S+');
 
@@ -75,8 +71,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                           children: [
                             _buildTopBar(context),
                             const SizedBox(height: 20),
-                            _buildActivityPulse(context, vm, selectedDay),
-                            const SizedBox(height: 16),
                             _buildContextualDateSelector(
                               context,
                               vm,
@@ -126,126 +120,14 @@ class _DateSelectorViewState extends State<DateSelectorView> {
             softWrap: false,
           ),
         ),
-      ],
-    );
-  }
-
-  Widget _buildActivityPulse(
-    BuildContext context,
-    DateSelectorViewModel vm,
-    DateTime anchorDate,
-  ) {
-    _updatePulseDirection(anchorDate);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Chamber Activity Pulse',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-        ),
-        Text(
-          'Last 7 days',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 10),
-        FutureBuilder<List<int>>(
-          future: _loadActivityWordCounts(vm, anchorDate),
-          builder: (context, snapshot) {
-            final values = snapshot.data ?? List<int>.filled(7, 0);
-            final maxValue = values.fold<int>(0, (a, b) => a > b ? a : b);
-            return Column(
-              children: [
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 260),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) {
-                    final beginOffset = Offset(
-                      0.25 * _pulseSlideDirection,
-                      0,
-                    );
-                    final slide = Tween<Offset>(
-                      begin: beginOffset,
-                      end: Offset.zero,
-                    ).animate(animation);
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(position: slide, child: child),
-                    );
-                  },
-                  child: _buildPulseGrid(
-                    values: values,
-                    maxValue: maxValue,
-                    key: ValueKey(DateSelectorViewModel.formatDate(anchorDate)),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Text(
-                      'Low',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.arrow_right_alt, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      'High',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  void _updatePulseDirection(DateTime anchorDate) {
-    final normalized =
-        DateTime(anchorDate.year, anchorDate.month, anchorDate.day);
-    final last = _lastPulseAnchorDate;
-    if (last != null) {
-      if (normalized.isAfter(last)) {
-        _pulseSlideDirection = 1;
-      } else if (normalized.isBefore(last)) {
-        _pulseSlideDirection = -1;
-      }
-    }
-    _lastPulseAnchorDate = normalized;
-  }
-
-  Widget _buildPulseGrid({
-    required List<int> values,
-    required int maxValue,
-    required Key key,
-  }) {
-    return GridView.builder(
-      key: key,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: values.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 7,
-        mainAxisSpacing: 6,
-        crossAxisSpacing: 6,
-      ),
-      itemBuilder: (context, index) {
-        final value = values[index];
-        final intensity = value == 0 || maxValue == 0 ? 0.0 : value / maxValue;
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: value == 0
-                ? _pulseMinColor
-                : Color.lerp(_pulseMinColor, _pulseMaxColor, intensity),
-            borderRadius: BorderRadius.circular(4),
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          tooltip: 'Settings',
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SettingsView()),
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 
@@ -322,11 +204,19 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(item.durationLabel),
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    children: [
+                      if (item.house.isNotEmpty) ...[
+                        _HousePill(item.house),
+                        const SizedBox(width: 6),
+                      ],
+                      Text(item.durationLabel),
+                    ],
+                  ),
                 ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _navigateToTranscript(day),
+                onTap: () => _navigateToTranscript(day, debateId: item.debateId),
               ),
             );
           },
@@ -385,34 +275,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     vm.selectDay(next);
   }
 
-  Future<List<int>> _loadActivityWordCounts(
-    DateSelectorViewModel vm,
-    DateTime anchorDate,
-  ) async {
-    final service = context.read<ParliamentaryDataService>();
-    final days = _last7Days(anchorDate);
-    return Future.wait(days.map((day) async {
-      if (!vm.isSittingDay(day)) {
-        return 0;
-      }
-      final date = DateSelectorViewModel.formatDate(day);
-      final isCached = await vm.isCached(day);
-      if (!isCached) {
-        return 0;
-      }
-
-      try {
-        final speeches = await service.getSpeeches(date);
-        return speeches.fold<int>(
-          0,
-          (sum, speech) => sum + _wordCount(speech.speechText),
-        );
-      } catch (_) {
-        return 0;
-      }
-    }));
-  }
-
   Future<List<_DebateFeedItem>> _loadDebatesFeed(
     DateSelectorViewModel vm,
     DateTime day,
@@ -420,31 +282,59 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final service = context.read<ParliamentaryDataService>();
     final date = DateSelectorViewModel.formatDate(day);
     try {
-      final speeches = await service.getSpeeches(date);
-      final wordCountsByDebate = <String, int>{};
+      final speechesFuture = service.getSpeeches(date);
+      final debatesFuture = service.getDebatesForDate(date);
+
+      final speeches = await speechesFuture;
+      final debates = await debatesFuture;
+
+      // Build root debate lookups from the debates table.
+      final rootIds = {for (final d in debates) d.id};
+      final houseByDebateId = {for (final d in debates) d.id: d.house};
+      final titleByDebateId = {for (final d in debates) d.id: d.title};
+      final orderByDebateId = {for (final d in debates) d.id: d.orderIndex};
+
+      // Group speeches by root debate — sub-section speeches inherit the
+      // most recently seen root debate ID.
+      final wordCountsByDebateId = <String, int>{};
+      String? currentRoot;
       for (final speech in speeches) {
-        final title = speech.debateTitle.trim().isEmpty
-            ? 'Untitled Parliamentary Debate'
-            : speech.debateTitle.trim();
-        wordCountsByDebate[title] =
-            (wordCountsByDebate[title] ?? 0) + _wordCount(speech.speechText);
+        if (rootIds.contains(speech.debateId)) {
+          currentRoot = speech.debateId;
+        }
+        if (currentRoot == null) continue;
+        wordCountsByDebateId[currentRoot] =
+            (wordCountsByDebateId[currentRoot] ?? 0) +
+                _wordCount(speech.speechText);
       }
 
-      if (wordCountsByDebate.isEmpty) {
-        return const <_DebateFeedItem>[];
+      if (wordCountsByDebateId.isEmpty) {
+        // No speeches yet — fall back to showing debate titles with no duration.
+        return debates
+            .map((d) => _DebateFeedItem(
+                  debateId: d.id,
+                  title: d.title,
+                  durationMinutes: 0,
+                  house: d.house,
+                  order: d.orderIndex,
+                ))
+            .toList();
       }
 
-      final items = wordCountsByDebate.entries
+      final items = wordCountsByDebateId.entries
           .map(
             (entry) => _DebateFeedItem(
-              title: entry.key,
+              debateId: entry.key,
+              title: titleByDebateId[entry.key] ?? '',
               durationMinutes: _minutesFromWords(entry.value),
+              house: houseByDebateId[entry.key] ?? '',
+              order: orderByDebateId[entry.key] ?? 0,
             ),
           )
           .toList()
-        ..sort((a, b) => b.durationMinutes.compareTo(a.durationMinutes));
+        ..sort((a, b) => a.order.compareTo(b.order));
 
-      return items.take(_maxDebateItems).toList();
+      return items;
     } catch (_) {
       return const <_DebateFeedItem>[];
     }
@@ -471,14 +361,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
-  static List<DateTime> _last7Days(DateTime anchor) {
-    final end = DateTime(anchor.year, anchor.month, anchor.day);
-    return List<DateTime>.generate(7, (index) {
-      final daysAgo = 6 - index;
-      return end.subtract(Duration(days: daysAgo));
-    });
-  }
-
   static int _wordCount(String text) {
     return _wordRegex.allMatches(text).length;
   }
@@ -489,12 +371,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         .clamp(1, _maxDurationMinutes);
   }
 
-  void _navigateToTranscript(DateTime day) {
+  void _navigateToTranscript(DateTime day, {String debateId = ''}) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TranscriptView(
           date: DateSelectorViewModel.formatDate(day),
           displayDate: _friendlyDate(day),
+          initialDebateId: debateId.isNotEmpty ? debateId : null,
         ),
       ),
     );
@@ -530,13 +413,56 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 }
 
+/// Small colored pill showing "Commons" or "Lords" on debate feed cards.
+class _HousePill extends StatelessWidget {
+  final String house;
+
+  const _HousePill(this.house);
+
+  @override
+  Widget build(BuildContext context) {
+    final h = house.toLowerCase();
+    final color = (h.contains('lords') || h.contains('grand committee'))
+        ? const Color(0xFFB50938)
+        : (h.contains('westminster hall'))
+            ? const Color(0xFF006548)
+            : (h.contains('committee'))
+                ? const Color(0xFF1A5276)
+                : const Color(0xFF006548); // Commons default
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
+      ),
+      child: Text(
+        house,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: color,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+}
+
 class _DebateFeedItem {
   final String title;
   final int durationMinutes;
+  final String house;
+  final String debateId;
+  final int order;
 
   const _DebateFeedItem({
     required this.title,
     required this.durationMinutes,
+    this.house = '',
+    this.debateId = '',
+    this.order = 0,
   });
 
   String get durationLabel => _durationLabelFromMinutes(durationMinutes);

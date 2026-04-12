@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -74,6 +76,23 @@ class DatabaseService {
         }
       },
     );
+  }
+
+  /// Deletes all `sitting_*.db` files from the documents directory.
+  ///
+  /// Returns the number of files deleted.
+  Future<int> wipeDebateCache() async {
+    final dir = await getApplicationDocumentsDirectory();
+    int count = 0;
+    await for (final entity in dir.list()) {
+      if (entity is File &&
+          p.basename(entity.path).startsWith('sitting_') &&
+          p.basename(entity.path).endsWith('.db')) {
+        await deleteDatabase(entity.path);
+        count++;
+      }
+    }
+    return count;
   }
 
   // ─── Sitting DB ───────────────────────────────────────────────────────────

@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../models/member.dart';
 import '../services/parliamentary_data_service.dart';
 import '../viewmodels/transcript_viewmodel.dart';
 import '../widgets/speech_block.dart';
+import 'member_view.dart';
 
 /// Displays the verbatim transcript for a single Parliamentary sitting day.
 ///
@@ -24,11 +26,15 @@ import '../widgets/speech_block.dart';
 class TranscriptView extends StatefulWidget {
   final String date;
   final String displayDate;
+  /// If set, the transcript will scroll to the first speech of this debate
+  /// once loading completes.
+  final String? initialDebateId;
 
   const TranscriptView({
     super.key,
     required this.date,
     required this.displayDate,
+    this.initialDebateId,
   });
 
   @override
@@ -46,8 +52,16 @@ class _TranscriptViewState extends State<TranscriptView> {
   void initState() {
     super.initState();
     final service = context.read<ParliamentaryDataService>();
-    _vm = TranscriptViewModel(service, date: widget.date);
-    unawaited(_vm.loadSpeeches());
+    _vm = TranscriptViewModel(
+      service,
+      date: widget.date,
+      initialDebateId: widget.initialDebateId,
+    );
+    unawaited(_loadAndScroll());
+  }
+
+  Future<void> _loadAndScroll() async {
+    await _vm.loadSpeeches();
   }
 
   @override
@@ -60,11 +74,21 @@ class _TranscriptViewState extends State<TranscriptView> {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider.value(
       value: _vm,
-      child: Scaffold(
+      child: Consumer<TranscriptViewModel>(
+        builder: (context, vm, _) {
+          final house = vm.primaryHouse;
+          final appBarColor = _houseColor(house);
+          const appBarForeground = Color(0xFFFFE000);
+
+          return Scaffold(
         key: _scaffoldKey,
         appBar: AppBar(
-          title: Consumer<TranscriptViewModel>(
-            builder: (context, vm, _) => Column(
+              backgroundColor: appBarColor,
+              foregroundColor: appBarColor != null ? appBarForeground : null,
+              iconTheme: appBarColor != null
+                  ? const IconThemeData(color: appBarForeground)
+                  : null,
+          title: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
@@ -79,11 +103,14 @@ class _TranscriptViewState extends State<TranscriptView> {
                   widget.displayDate,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: appBarColor != null
+                                ? appBarForeground.withValues(alpha: 0.8)
+                                : null,
+                          ),
                 ),
               ],
             ),
-          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.people),
@@ -118,6 +145,8 @@ class _TranscriptViewState extends State<TranscriptView> {
             );
           },
         ),
+          );
+        },
       ),
     );
   }
@@ -202,6 +231,9 @@ class _TranscriptViewState extends State<TranscriptView> {
             speech: speech,
             member: member,
             timeLabel: timeLabel,
+            onMemberTap: member != null
+                ? () => _openMemberProfile(context, member)
+                : null,
           ),
         );
       },
@@ -237,12 +269,8 @@ class _TranscriptViewState extends State<TranscriptView> {
                     itemCount: vm.speakers.length,
                     itemBuilder: (context, index) {
                       final speaker = vm.speakers[index];
-                      final member = vm.memberFor(speaker.memberId);
                       return ListTile(
                         title: Text(speaker.name),
-                        subtitle: member?.party.isNotEmpty == true
-                            ? Text(member!.party)
-                            : null,
                         onTap: () {
                           Navigator.of(context).pop(); // close drawer
                           _scrollToSpeaker(speaker.firstSpeechIndex);
@@ -259,11 +287,31 @@ class _TranscriptViewState extends State<TranscriptView> {
     );
   }
 
+  void _openMemberProfile(BuildContext context, Member member) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => MemberView(member: member)),
+    );
+  }
+
   void _scrollToSpeaker(int index) {
     _scrollController.scrollTo(
       index: index,
       duration: const Duration(milliseconds: 400),
       curve: Curves.easeInOut,
     );
+  }
+
+  static Color? _houseColor(String? house) {
+    if (house == null) return null;
+    final h = house.toLowerCase();
+    if (h.contains('lords') || h.contains('grand committee')) {
+      return const Color(0xFFB50938);
+    }
+    if (h.contains('commons') || h.contains('westminster hall')) {
+      return const Color(0xFF006548);
+    }
+    if (h.contains('&')) return const Color(0xFF5B1A6B);
+    // Committee rooms — use a neutral dark teal.
+    return const Color(0xFF1A5276);
   }
 }

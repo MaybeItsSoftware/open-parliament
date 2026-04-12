@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
@@ -67,6 +68,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
     lastSavedSpeakerAliasMemberIds = Map<String, int>.from(aliasToMemberId);
     speakerAliasMemberIds.addAll(aliasToMemberId);
   }
+
+  @override
+  Future<List<Debate>> getDebatesForDate(String date) async => const [];
 
   @override
   void dispose() {}

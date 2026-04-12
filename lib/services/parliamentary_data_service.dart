@@ -117,6 +117,41 @@ class ParliamentaryDataService {
     return _fetchAndCacheSitting(date);
   }
 
+  /// Fetches a single member from the Members API and stores them in the local
+  /// members DB.
+  ///
+  /// Use this when a [memberId] is known from the Hansard API but is absent
+  /// from the local cache — for example, former MPs who left Parliament after
+  /// the last full member sync, or newly elected members.
+  ///
+  /// Returns `null` if the API returns no data or the response cannot be parsed.
+  Future<Member?> fetchAndCacheMemberById(int id) async {
+    final detail = await _membersApi.fetchMemberDetail(id);
+    if (detail == null) return null;
+    try {
+      final member = Member.fromApiJson({'value': detail});
+      final db = await _db.openMembersDb();
+      await db.insert(
+        'members',
+        member.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return member;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns all debates for [date] from the local cache.
+  ///
+  /// Returns an empty list if the sitting has not been cached yet.
+  Future<List<Debate>> getDebatesForDate(String date) async {
+    if (!await _db.sittingDbExists(date)) return const [];
+    final db = await _db.openSittingDb(date);
+    final rows = await db.query('debates', orderBy: 'order_idx ASC');
+    return rows.map(Debate.fromDb).toList();
+  }
+
   /// Returns `true` when a local cache already exists for [date].
   Future<bool> isSittingCached(String date) => _db.sittingDbExists(date);
 
@@ -246,6 +281,9 @@ class ParliamentaryDataService {
     );
     return rows.map(Speech.fromDb).toList();
   }
+
+  /// Deletes all cached sitting databases. Returns the number wiped.
+  Future<int> wipeDebateCache() => _db.wipeDebateCache();
 
   void dispose() {
     _membersApi.dispose();

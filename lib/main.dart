@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'services/parliamentary_data_service.dart';
+import 'services/theme_service.dart';
 import 'views/date_selector_view.dart';
 
-void main() {
-  runApp(const OpenHansardApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final themeService = ThemeService();
+  await themeService.load();
+  runApp(OpenHansardApp(themeService: themeService));
 }
 
 /// Root widget for Open Hansard.
@@ -17,29 +21,48 @@ void main() {
 ///
 /// See [ParliamentaryDataService] for full data-layer documentation.
 class OpenHansardApp extends StatelessWidget {
-  const OpenHansardApp({super.key});
+  final ThemeService themeService;
+
+  const OpenHansardApp({super.key, required this.themeService});
 
   @override
   Widget build(BuildContext context) {
-    return Provider<ParliamentaryDataService>(
-      create: (_) => ParliamentaryDataService(),
-      dispose: (_, service) => service.dispose(),
-      child: MaterialApp(
-        title: 'Open Hansard',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            // Parliamentary green – echoes the traditional colour of the
-            // House of Commons benches.
-            seedColor: const Color(0xFF006B3C),
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 2,
-          ),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: themeService),
+        Provider<ParliamentaryDataService>(
+          create: (_) => ParliamentaryDataService(),
+          dispose: (_, service) => service.dispose(),
         ),
-        home: const DateSelectorView(),
+      ],
+      child: Consumer<ThemeService>(
+        builder: (context, theme, _) => MaterialApp(
+          title: 'Open Hansard',
+          debugShowCheckedModeBanner: false,
+          themeMode: theme.themeMode,
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF006B3C),
+            ),
+            useMaterial3: true,
+            appBarTheme: const AppBarTheme(
+              centerTitle: true,
+              elevation: 2,
+            ),
+          ),
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF006B3C),
+              brightness: Brightness.dark,
+            ),
+            useMaterial3: true,
+            appBarTheme: const AppBarTheme(
+              centerTitle: true,
+              elevation: 2,
+            ),
+          ),
+          home: const DateSelectorView(),
+        ),
       ),
     );
   }

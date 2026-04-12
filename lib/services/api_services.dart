@@ -63,6 +63,77 @@ class MembersApiService {
     return members;
   }
 
+  /// Geocodes a UK constituency name to [latitude, longitude] using Nominatim.
+  ///
+  /// Returns `null` on network failure or if the constituency cannot be found.
+  Future<List<double>?> geocodeConstituency(String constituencyName) async {
+    final uri = Uri.parse(
+      'https://nominatim.openstreetmap.org/search',
+    ).replace(
+      queryParameters: {
+        'q': '$constituencyName UK constituency',
+        'format': 'json',
+        'limit': '1',
+        'countrycodes': 'gb',
+      },
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'open-hansard/1.0',
+        },
+      );
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as List<dynamic>;
+      if (body.isEmpty) return null;
+      final first = body.first as Map<String, dynamic>;
+      final lat = double.tryParse((first['lat'] as String?) ?? '');
+      final lon = double.tryParse((first['lon'] as String?) ?? '');
+      if (lat == null || lon == null) return null;
+      return [lat, lon];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetches extended detail for a single member (constituency, house, start date).
+  ///
+  /// Returns the unwrapped `value` object from the API, or null on failure.
+  Future<Map<String, dynamic>?> fetchMemberDetail(int id) async {
+    final uri = Uri.parse('$_baseUrl/$id');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return (body['value'] as Map<String, dynamic>?) ?? body;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetches the biography for a member (government/opposition posts, party history).
+  ///
+  /// Returns the unwrapped `value` object from the API, or null on failure.
+  Future<Map<String, dynamic>?> fetchMemberBiography(int id) async {
+    final uri = Uri.parse('$_baseUrl/$id/Biography');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return (body['value'] as Map<String, dynamic>?) ?? body;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void dispose() => _client.close();
 }
 
@@ -154,30 +225,28 @@ class HansardApiService {
             continue;
           }
 
-          final rootSection = _extractRootSectionNode(treeItem);
-          if (rootSection == null) {
-            continue;
+          final rootSections = _extractRootSectionNodes(treeItem);
+          for (final rootSection in rootSections) {
+            final debateId = (rootSection['ExternalId'] as String?) ??
+                (rootSection['externalId'] as String?) ??
+                '';
+            if (debateId.isEmpty) {
+              continue;
+            }
+
+            final title = (rootSection['Title'] as String?) ??
+                (treeItem['Title'] as String?) ??
+                section;
+
+            debates.add(
+              Debate(
+                id: debateId,
+                title: title,
+                house: _resolveHouseLabel(currentHouse, section),
+                orderIndex: orderIndex++,
+              ),
+            );
           }
-
-          final debateId = (rootSection['ExternalId'] as String?) ??
-              (rootSection['externalId'] as String?) ??
-              '';
-          if (debateId.isEmpty) {
-            continue;
-          }
-
-          final title = (rootSection['Title'] as String?) ??
-              (treeItem['Title'] as String?) ??
-              section;
-
-          debates.add(
-            Debate(
-              id: debateId,
-              title: title,
-              house: currentHouse,
-              orderIndex: orderIndex++,
-            ),
-          );
         }
       }
     }
@@ -324,36 +393,94 @@ class HansardApiService {
     );
   }
 
+  /// Fetches recent Hansard contributions (speeches) for [memberId].
+  ///
+  /// Returns raw JSON result maps, newest first.  Returns an empty list on
+  /// network failure or when no contributions are found.
+  Future<List<Map<String, dynamic>>> fetchMemberContributions(
+    int memberId, {
+    int take = 20,
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/search/contributions.json',
+    ).replace(
+      queryParameters: {
+        'memberId': memberId.toString(),
+        'take': take.toString(),
+      },
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = (body['Results'] as List<dynamic>?) ?? [];
+      return results.whereType<Map<String, dynamic>>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   void dispose() => _client.close();
 
-  Map<String, dynamic>? _extractRootSectionNode(Map<String, dynamic> treeItem) {
+  /// Maps a (house, section) pair to a human-readable venue label.
+  static String _resolveHouseLabel(String house, String section) {
+    final s = section.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (s == 'pbc' || s.contains('publicbill') || s.contains('committee')) {
+      return 'Committee';
+    }
+    if (s == 'westhall' || s.contains('westminsterhall')) {
+      return 'Westminster Hall';
+    }
+    if (s.contains('grandcommittee')) return 'Grand Committee';
+    if (s == 'gen') return 'General Committee';
+    if (s == 'wms') return house; // Written Statements — keep house label
+    return house;
+  }
+
+  /// Returns the top-level debate nodes from a section tree.
+  ///
+  /// The tree has one container node (ParentId == null) representing the
+  /// chamber/section (e.g. "Commons Chamber"). The actual debates are its
+  /// direct children. We return those direct children, each of which maps to
+  /// a fetchable debate via its ExternalId.
+  List<Map<String, dynamic>> _extractRootSectionNodes(
+      Map<String, dynamic> treeItem) {
     final sectionTreeItems = treeItem['SectionTreeItems'];
     if (sectionTreeItems is! List<dynamic> || sectionTreeItems.isEmpty) {
-      return null;
+      return const [];
     }
 
-    for (final item in sectionTreeItems) {
-      if (item is! Map<String, dynamic>) {
-        continue;
-      }
-      final parentId = item['ParentId'];
-      final externalId = item['ExternalId'] ?? item['externalId'];
-      if (parentId == null && externalId is String && externalId.isNotEmpty) {
-        return item;
+    final items = sectionTreeItems.whereType<Map<String, dynamic>>().toList();
+
+    // Find the container node (ParentId == null).
+    Map<String, dynamic>? container;
+    for (final item in items) {
+      if (item['ParentId'] == null) {
+        container = item;
+        break;
       }
     }
 
-    // Fallback to the first node that has an ExternalId.
-    for (final item in sectionTreeItems) {
-      if (item is! Map<String, dynamic>) {
-        continue;
-      }
-      final externalId = item['ExternalId'] ?? item['externalId'];
-      if (externalId is String && externalId.isNotEmpty) {
-        return item;
-      }
+    if (container != null) {
+      // Return direct children of the container that have an ExternalId.
+      final containerId = container['Id'];
+      final children = items.where((item) {
+        final externalId = item['ExternalId'] ?? item['externalId'];
+        return item['ParentId'] == containerId &&
+            externalId is String &&
+            externalId.isNotEmpty;
+      }).toList();
+      if (children.isNotEmpty) return children;
     }
-    return null;
+
+    // Fallback: return all nodes with an ExternalId.
+    return items.where((item) {
+      final externalId = item['ExternalId'] ?? item['externalId'];
+      return externalId is String && externalId.isNotEmpty;
+    }).toList();
   }
 
   DateTime? _parseSittingDate(dynamic value) {
