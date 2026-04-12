@@ -54,7 +54,7 @@ class MembersApiService {
 
       final totalResults = (body['totalResults'] as num?)?.toInt() ?? 0;
       skip += items.length;
-      if (members.length >= totalResults || items.length < pageSize) {
+      if (totalResults > 0 && skip >= totalResults) {
         break;
       }
     }
