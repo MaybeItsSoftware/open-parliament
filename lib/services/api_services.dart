@@ -225,14 +225,19 @@ class HansardApiService {
         if (item is! Map<String, dynamic>) {
           continue;
         }
-        speeches.add(
-          Speech.fromApiJson(
-            item,
-            debateId: nodeDebateId,
-            debateTitle: nodeDebateTitle,
-            orderIndex: orderIndex++,
-          ),
+        final speech = Speech.fromApiJson(
+          item,
+          debateId: nodeDebateId,
+          debateTitle: nodeDebateTitle,
+          orderIndex: orderIndex++,
         );
+        // Ignore structural markers (e.g. empty column-number spans).
+        if (speech.speechText.trim().isEmpty &&
+            !speech.hasNamedSpeaker &&
+            !speech.isTimestamp) {
+          continue;
+        }
+        speeches.add(speech);
       }
 
       final childDebates =
@@ -255,6 +260,68 @@ class HansardApiService {
       fallbackDebateTitle: debateTitle,
     );
     return speeches;
+  }
+
+  /// Returns the nearest previous and next sitting dates around [date].
+  ///
+  /// Uses `/overview/linkedsittingdates.{format}`. When [house] is omitted,
+  /// both Commons and Lords are queried and merged so that any parliamentary
+  /// sitting counts.
+  Future<LinkedSittingDates> fetchLinkedSittingDates(
+    String date, {
+    String? house,
+  }) async {
+    final houses =
+        house != null ? <String>[house] : const <String>['Commons', 'Lords'];
+    final previousCandidates = <DateTime>[];
+    final nextCandidates = <DateTime>[];
+
+    for (final currentHouse in houses) {
+      final uri = Uri.parse(
+        '$_baseUrl/overview/linkedsittingdates.json',
+      ).replace(
+        queryParameters: {'house': currentHouse, 'date': date},
+      );
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 404) {
+        continue;
+      }
+      if (response.statusCode != 200) {
+        throw HansardApiException(
+          'Failed to fetch linked sitting dates for $date ($currentHouse): '
+          'HTTP ${response.statusCode}',
+        );
+      }
+
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final previous = _parseSittingDate(body['PreviousSittingDate']);
+      final next = _parseSittingDate(body['NextSittingDate']);
+      if (previous != null) previousCandidates.add(previous);
+      if (next != null) nextCandidates.add(next);
+    }
+
+    DateTime? closestPrevious;
+    if (previousCandidates.isNotEmpty) {
+      closestPrevious = previousCandidates.reduce(
+        (a, b) => a.isAfter(b) ? a : b,
+      );
+    }
+
+    DateTime? closestNext;
+    if (nextCandidates.isNotEmpty) {
+      closestNext = nextCandidates.reduce(
+        (a, b) => a.isBefore(b) ? a : b,
+      );
+    }
+
+    return LinkedSittingDates(
+      previousSittingDate: closestPrevious,
+      nextSittingDate: closestNext,
+    );
   }
 
   void dispose() => _client.close();
@@ -288,6 +355,27 @@ class HansardApiService {
     }
     return null;
   }
+
+  DateTime? _parseSittingDate(dynamic value) {
+    if (value is! String || value.isEmpty) {
+      return null;
+    }
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) {
+      return null;
+    }
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+}
+
+class LinkedSittingDates {
+  final DateTime? previousSittingDate;
+  final DateTime? nextSittingDate;
+
+  const LinkedSittingDates({
+    required this.previousSittingDate,
+    required this.nextSittingDate,
+  });
 }
 
 /// Exception thrown when a Hansard API request fails.

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -15,14 +17,15 @@ class DateSelectorView extends StatefulWidget {
 
 class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
+  DateTime? _lastPulseAnchorDate;
+  int _pulseSlideDirection = 1;
 
   static const Color _pulseMaxColor = Color(0xFF005EA5);
   static const Color _pulseMinColor = Color(0xFFE2E5EA);
-  static const DateTime _minDate = DateTime(2000, 1, 1);
+  static final DateTime _minDate = DateTime(2000, 1, 1);
   static const int _averageWordsPerMinute = 130;
   static const int _maxDebateItems = 8;
   static const int _maxDurationMinutes = 24 * 60;
-  static const int _maxDateSearchDays = 14;
   static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
@@ -30,12 +33,22 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     super.initState();
     final service = context.read<ParliamentaryDataService>();
     _vm = DateSelectorViewModel(service);
+    unawaited(_initializeLandingDay());
   }
 
   @override
   void dispose() {
     _vm.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeLandingDay() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final latestDay = await _vm.mostRecentSittingDay(today);
+    if (latestDay == null) return;
+    _vm.setFocusedDay(latestDay);
+    _vm.selectDay(latestDay);
   }
 
   @override
@@ -47,29 +60,48 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           final selectedDay = vm.selectedDay ?? vm.focusedDay;
           return Scaffold(
             body: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildTopBar(context),
-                    const SizedBox(height: 20),
-                    _buildActivityPulse(context, vm, selectedDay),
-                    const SizedBox(height: 16),
-                    _buildContextualDateSelector(context, vm, selectedDay),
-                    const SizedBox(height: 20),
-                    Text(
-                      'Today’s Key Debates',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final maxWidth =
+                      constraints.maxWidth >= 1200 ? 1080.0 : 900.0;
+                  return Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxWidth),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildTopBar(context),
+                            const SizedBox(height: 20),
+                            _buildActivityPulse(context, vm, selectedDay),
+                            const SizedBox(height: 16),
+                            _buildContextualDateSelector(
+                              context,
+                              vm,
+                              selectedDay,
+                            ),
+                            const SizedBox(height: 20),
+                            Text(
+                              'Today’s Key Debates',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: _buildDebatesFeed(vm, selectedDay),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: _buildDebatesFeed(vm, selectedDay),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           );
@@ -89,9 +121,11 @@ class _DateSelectorViewState extends State<DateSelectorView> {
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
           ),
         ),
-        const Icon(Icons.account_circle_outlined, size: 24),
       ],
     );
   }
@@ -101,6 +135,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     DateSelectorViewModel vm,
     DateTime anchorDate,
   ) {
+    _updatePulseDirection(anchorDate);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -110,37 +145,41 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                 fontWeight: FontWeight.w600,
               ),
         ),
+        Text(
+          'Last 7 days',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 10),
         FutureBuilder<List<int>>(
           future: _loadActivityWordCounts(vm, anchorDate),
           builder: (context, snapshot) {
-            final values = snapshot.data ?? List<int>.filled(28, 0);
+            final values = snapshot.data ?? List<int>.filled(7, 0);
             final maxValue = values.fold<int>(0, (a, b) => a > b ? a : b);
             return Column(
               children: [
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: values.length,
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 7,
-                    mainAxisSpacing: 6,
-                    crossAxisSpacing: 6,
-                  ),
-                  itemBuilder: (context, index) {
-                    final value = values[index];
-                    final intensity = value == 0 || maxValue == 0
-                        ? 0.0
-                        : value / maxValue;
-                    return DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: value == 0
-                            ? _pulseMinColor
-                            : Color.lerp(_pulseMinColor, _pulseMaxColor, intensity),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 260),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    final beginOffset = Offset(
+                      0.25 * _pulseSlideDirection,
+                      0,
+                    );
+                    final slide = Tween<Offset>(
+                      begin: beginOffset,
+                      end: Offset.zero,
+                    ).animate(animation);
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(position: slide, child: child),
                     );
                   },
+                  child: _buildPulseGrid(
+                    values: values,
+                    maxValue: maxValue,
+                    key: ValueKey(DateSelectorViewModel.formatDate(anchorDate)),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -166,6 +205,50 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
+  void _updatePulseDirection(DateTime anchorDate) {
+    final normalized =
+        DateTime(anchorDate.year, anchorDate.month, anchorDate.day);
+    final last = _lastPulseAnchorDate;
+    if (last != null) {
+      if (normalized.isAfter(last)) {
+        _pulseSlideDirection = 1;
+      } else if (normalized.isBefore(last)) {
+        _pulseSlideDirection = -1;
+      }
+    }
+    _lastPulseAnchorDate = normalized;
+  }
+
+  Widget _buildPulseGrid({
+    required List<int> values,
+    required int maxValue,
+    required Key key,
+  }) {
+    return GridView.builder(
+      key: key,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: values.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 7,
+        mainAxisSpacing: 6,
+        crossAxisSpacing: 6,
+      ),
+      itemBuilder: (context, index) {
+        final value = values[index];
+        final intensity = value == 0 || maxValue == 0 ? 0.0 : value / maxValue;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: value == 0
+                ? _pulseMinColor
+                : Color.lerp(_pulseMinColor, _pulseMaxColor, intensity),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildContextualDateSelector(
     BuildContext context,
     DateSelectorViewModel vm,
@@ -185,7 +268,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left),
-            onPressed: () => _shiftBySittingDay(vm, selectedDay, -1),
+            onPressed: () => unawaited(_shiftBySittingDay(vm, selectedDay, -1)),
           ),
           Expanded(
             child: GestureDetector(
@@ -206,7 +289,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           IconButton(
             icon: const Icon(Icons.chevron_right),
             onPressed: canMoveForward
-                ? () => _shiftBySittingDay(vm, selectedDay, 1)
+                ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
                 : null,
           ),
         ],
@@ -218,7 +301,15 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return FutureBuilder<List<_DebateFeedItem>>(
       future: _loadDebatesFeed(vm, day),
       builder: (context, snapshot) {
-        final items = snapshot.data ?? _fallbackDebates();
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final items = snapshot.data ?? const <_DebateFeedItem>[];
+        if (items.isEmpty) {
+          return _buildNoDebatesCard(day);
+        }
+
         return ListView.separated(
           itemCount: items.length,
           separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -254,32 +345,42 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
     if (picked == null) return;
 
-    var adjusted = DateTime(picked.year, picked.month, picked.day);
-    var guard = 0;
-    while (!vm.isSittingDay(adjusted) &&
-        adjusted.isAfter(_minDate) &&
-        guard < _maxDateSearchDays) {
-      adjusted = adjusted.subtract(const Duration(days: 1));
-      guard++;
+    final chosenDay = DateTime(picked.year, picked.month, picked.day);
+    final nearest = await vm.nearestSittingDay(chosenDay);
+    if (nearest == null) {
+      if (!mounted) return;
+      _showInfoMessage('Parliament appears to be in recess around this date.');
+      return;
     }
-    if (!vm.isSittingDay(adjusted)) return;
-    vm.setFocusedDay(adjusted);
-    vm.selectDay(adjusted);
+    vm.setFocusedDay(nearest);
+    vm.selectDay(nearest);
+
+    if (!mounted) return;
+    if (!nearest.isAtSameMomentAs(chosenDay)) {
+      _showInfoMessage(
+        'No sitting on ${_friendlyDate(chosenDay)}. Showing ${_friendlyDate(nearest)} instead.',
+      );
+    }
   }
 
-  void _shiftBySittingDay(DateSelectorViewModel vm, DateTime current, int deltaDays) {
+  Future<void> _shiftBySittingDay(
+    DateSelectorViewModel vm,
+    DateTime current,
+    int deltaDays,
+  ) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    var next = current;
-    var guard = 0;
-    do {
-      next = next.add(Duration(days: deltaDays));
-      guard++;
-    } while (!vm.isSittingDay(next) &&
-        next.isAfter(_minDate) &&
-        guard < _maxDateSearchDays);
+    final next = deltaDays < 0
+        ? await vm.previousSittingDay(current)
+        : await vm.nextSittingDay(current);
 
-    if (next.isAfter(today) || !vm.isSittingDay(next)) return;
+    if (next == null) {
+      if (!mounted) return;
+      _showInfoMessage('No more sitting dates available in that direction.');
+      return;
+    }
+
+    if (next.isAfter(today)) return;
     vm.setFocusedDay(next);
     vm.selectDay(next);
   }
@@ -289,7 +390,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     DateTime anchorDate,
   ) async {
     final service = context.read<ParliamentaryDataService>();
-    final days = _last28Days(anchorDate);
+    final days = _last7Days(anchorDate);
     return Future.wait(days.map((day) async {
       if (!vm.isSittingDay(day)) {
         return 0;
@@ -317,11 +418,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     DateTime day,
   ) async {
     final service = context.read<ParliamentaryDataService>();
-    final isCached = await vm.isCached(day);
-    if (!isCached) {
-      return _fallbackDebates();
-    }
-
     final date = DateSelectorViewModel.formatDate(day);
     try {
       final speeches = await service.getSpeeches(date);
@@ -335,7 +431,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       }
 
       if (wordCountsByDebate.isEmpty) {
-        return _fallbackDebates();
+        return const <_DebateFeedItem>[];
       }
 
       final items = wordCountsByDebate.entries
@@ -350,35 +446,35 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
       return items.take(_maxDebateItems).toList();
     } catch (_) {
-      return _fallbackDebates();
+      return const <_DebateFeedItem>[];
     }
   }
 
-  List<_DebateFeedItem> _fallbackDebates() {
-    return const [
-      _DebateFeedItem(
-        title: 'Healthcare Reform Bill: Second Reading',
-        durationMinutes: 195,
+  Widget _buildNoDebatesCard(DateTime day) {
+    return Center(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'No debates are available for ${_friendlyDate(day)}.\n'
+            'Parliament may be in recess.',
+            textAlign: TextAlign.center,
+          ),
+        ),
       ),
-      _DebateFeedItem(
-        title: 'National Infrastructure and Transport Funding',
-        durationMinutes: 160,
-      ),
-      _DebateFeedItem(
-        title: 'Education Standards and School Accountability',
-        durationMinutes: 115,
-      ),
-      _DebateFeedItem(
-        title: 'Energy Security and Household Costs',
-        durationMinutes: 90,
-      ),
-    ];
+    );
   }
 
-  static List<DateTime> _last28Days(DateTime anchor) {
+  void _showInfoMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  static List<DateTime> _last7Days(DateTime anchor) {
     final end = DateTime(anchor.year, anchor.month, anchor.day);
-    return List<DateTime>.generate(28, (index) {
-      final daysAgo = 27 - index;
+    return List<DateTime>.generate(7, (index) {
+      final daysAgo = 6 - index;
       return end.subtract(Duration(days: daysAgo));
     });
   }
@@ -407,12 +503,27 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   /// Returns a human-readable date string like "Monday, 1 November 2024".
   static String _friendlyDate(DateTime day) {
     const weekdays = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
-      'Saturday', 'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ];
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     return '${weekdays[day.weekday - 1]}, ${day.day} '
         '${months[day.month - 1]} ${day.year}';

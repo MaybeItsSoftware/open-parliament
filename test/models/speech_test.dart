@@ -51,7 +51,7 @@ void main() {
     test('fromApiJson decodes HTML entities', () {
       final json = {
         'ItemId': 'item-003',
-        'Value': 'A &amp; B &lt;C&gt; &quot;D&quot; &#39;E&#39;',
+        'Value': 'A &amp; B &lt;C&gt; &quot;D&quot; &#39;E&#39; &mdash; Z',
       };
       final speech = Speech.fromApiJson(
         json,
@@ -59,7 +59,38 @@ void main() {
         debateTitle: debateTitle,
         orderIndex: 2,
       );
-      expect(speech.speechText, 'A & B <C> "D" \'E\'');
+      expect(speech.speechText, 'A & B <C> "D" \'E\' — Z');
+    });
+
+    test('fromApiJson removes column-number spans before text extraction', () {
+      final json = {
+        'ItemId': 'item-003b',
+        'Value':
+            '<span class="column-number">Column 123</span><p>Real content</p>',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 2,
+      );
+      expect(speech.speechText, 'Real content');
+    });
+
+    test('fromApiJson captures HRSTag fields', () {
+      final json = {
+        'ItemId': 'item-003c',
+        'HRSTag': 'hs_quote',
+        'Value': 'Quoted line',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 2,
+      );
+      expect(speech.hrsTag, 'hs_quote');
+      expect(speech.isQuote, isTrue);
     });
 
     test('fromApiJson generates id from debateId + orderIndex when absent', () {
@@ -103,11 +134,44 @@ void main() {
       expect(speech.memberId, 172);
     });
 
+    test('fromApiJson marks timestamp items and derives display time', () {
+      final json = {
+        'ItemType': 'Timestamp',
+        'Value': '10:07:00',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 0,
+      );
+      expect(speech.isTimestamp, isTrue);
+      expect(speech.displayTime, '10:07');
+      expect(speech.hasNamedSpeaker, isFalse);
+    });
+
+    test('fromApiJson marks unattributed contribution as procedural', () {
+      final json = {
+        'ItemType': 'Contribution',
+        'Value': 'Announcement',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 0,
+      );
+      expect(speech.isProceduralText, isTrue);
+      expect(speech.isTimestamp, isFalse);
+    });
+
     test('toDb / fromDb round-trip preserves all fields', () {
       const speech = Speech(
         id: 'sp-1',
         debateId: 'debate-1',
         debateTitle: 'Some Debate',
+        itemType: 'Contribution',
+        hrsTag: 'hs_para',
         memberId: 42,
         memberName: 'Jane Doe',
         attributedTo: 'Jane Doe (Con)',
@@ -122,6 +186,8 @@ void main() {
       expect(restored.id, speech.id);
       expect(restored.debateId, speech.debateId);
       expect(restored.debateTitle, speech.debateTitle);
+      expect(restored.itemType, speech.itemType);
+      expect(restored.hrsTag, speech.hrsTag);
       expect(restored.memberId, speech.memberId);
       expect(restored.memberName, speech.memberName);
       expect(restored.attributedTo, speech.attributedTo);

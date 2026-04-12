@@ -18,7 +18,7 @@ class SpeakerEntry {
   });
 }
 
-/// View-model for [TranscriptView].
+/// View-model for the transcript screen.
 ///
 /// Loads speeches for a given sitting date, and exposes:
 ///  - the full ordered list of [Speech] objects for the SliverList.
@@ -31,14 +31,19 @@ class TranscriptViewModel extends ChangeNotifier {
   TranscriptViewModel(this._service, {required this.date});
 
   List<Speech> _speeches = [];
-  Map<int, Member> _memberCache = {};
+  final Map<int, Member> _memberCache = {};
+  final Map<String, Member> _speechMemberCache = {};
   List<SpeakerEntry> _speakers = [];
+  final List<_TimeAnchor> _timeAnchors = [];
+  String? _primaryDebateTitle;
   bool _isLoading = false;
   String? _error;
+  bool _isDisposed = false;
 
   List<Speech> get speeches => List.unmodifiable(_speeches);
   Map<int, Member> get memberCache => Map.unmodifiable(_memberCache);
   List<SpeakerEntry> get speakers => List.unmodifiable(_speakers);
+  String? get primaryDebateTitle => _primaryDebateTitle;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
@@ -46,17 +51,19 @@ class TranscriptViewModel extends ChangeNotifier {
   Future<void> loadSpeeches() async {
     _isLoading = true;
     _error = null;
-    notifyListeners();
+    if (!_isDisposed) notifyListeners();
 
     try {
-      _speeches = await _service.getSpeeches(date);
-      _buildSpeakersIndex();
+      final rawSpeeches = await _service.getSpeeches(date);
+      _speeches = _normaliseSpeeches(rawSpeeches);
+      _primaryDebateTitle = _computePrimaryDebateTitle(_speeches);
       await _loadMemberProfiles();
+      _buildSpeakersIndex();
     } catch (e) {
       _error = e.toString();
     } finally {
       _isLoading = false;
-      notifyListeners();
+      if (!_isDisposed) notifyListeners();
     }
   }
 
@@ -64,6 +71,64 @@ class TranscriptViewModel extends ChangeNotifier {
   Member? memberFor(int? memberId) {
     if (memberId == null) return null;
     return _memberCache[memberId];
+  }
+
+  /// Returns a member profile for a speech, including name-match fallback.
+  Member? memberForSpeech(Speech speech) {
+    if (speech.memberId != null) {
+      return _memberCache[speech.memberId!];
+    }
+    return _speechMemberCache[speech.id];
+  }
+
+  /// Returns an interpolated `HH:MM:SS` time estimate for transcript position.
+  ///
+  /// [position] is typically the top visible speech index, optionally including
+  /// a fractional part within that item (e.g. `12.4`).
+  String? estimatedTimeAtPosition(double position) {
+    if (_timeAnchors.isEmpty) return null;
+
+    final first = _timeAnchors.first;
+    final last = _timeAnchors.last;
+
+    if (position <= first.index) {
+      return _formatTimeToNearestMinute(first.secondsSinceMidnight);
+    }
+    if (position >= last.index) {
+      return _formatTimeToNearestMinute(last.secondsSinceMidnight);
+    }
+
+    _TimeAnchor? previous;
+    _TimeAnchor? next;
+    for (final anchor in _timeAnchors) {
+      if (anchor.index <= position) previous = anchor;
+      if (anchor.index >= position) {
+        next = anchor;
+        break;
+      }
+    }
+
+    if (previous == null && next == null) return null;
+    if (previous == null) {
+      return _formatTimeToNearestMinute(next!.secondsSinceMidnight);
+    }
+    if (next == null) {
+      return _formatTimeToNearestMinute(previous.secondsSinceMidnight);
+    }
+    if (next.index == previous.index) {
+      return _formatTimeToNearestMinute(previous.secondsSinceMidnight);
+    }
+
+    final ratio = (position - previous.index) / (next.index - previous.index);
+    final interpolatedSeconds = previous.secondsSinceMidnight +
+        ((next.secondsSinceMidnight - previous.secondsSinceMidnight) * ratio)
+            .round();
+    return _formatTimeToNearestMinute(interpolatedSeconds);
+  }
+
+  /// Returns an interpolated `HH:MM:SS` estimate for a specific speech index.
+  String? estimatedTimeForSpeechIndex(int index) {
+    return estimatedTimeAtPosition(index.toDouble());
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -78,10 +143,11 @@ class TranscriptViewModel extends ChangeNotifier {
       final key = s.memberName.isNotEmpty ? s.memberName : s.attributedTo;
       if (key.isNotEmpty && !seen.contains(key)) {
         seen.add(key);
+        final matchedMemberId = s.memberId ?? _speechMemberCache[s.id]?.id;
         result.add(
           SpeakerEntry(
             name: key,
-            memberId: s.memberId,
+            memberId: matchedMemberId,
             firstSpeechIndex: i,
           ),
         );
@@ -95,10 +161,7 @@ class TranscriptViewModel extends ChangeNotifier {
 
   /// Pre-fetches [Member] records for all member IDs in [_speeches].
   Future<void> _loadMemberProfiles() async {
-    final ids = _speeches
-        .map((s) => s.memberId)
-        .whereType<int>()
-        .toSet();
+    final ids = _speeches.map((s) => s.memberId).whereType<int>().toSet();
 
     for (final id in ids) {
       if (!_memberCache.containsKey(id)) {
@@ -108,5 +171,582 @@ class TranscriptViewModel extends ChangeNotifier {
         }
       }
     }
+
+    final allMembers = await _service.getMembers();
+    if (allMembers.isEmpty) return;
+    final lookup = _MemberLookupIndex(allMembers);
+    final aliasKeys = <String>{};
+    final aliasUpdates = <String, int>{};
+
+    for (final speech in _speeches) {
+      aliasKeys.addAll(_aliasKeysForSpeech(speech));
+      if (speech.memberId != null) {
+        final direct = _memberCache[speech.memberId!] ??
+            lookup.memberById(speech.memberId!);
+        if (direct != null) {
+          for (final key in _aliasKeysForSpeech(speech)) {
+            aliasUpdates[key] = direct.id;
+          }
+        }
+      }
+    }
+
+    final cachedAliases = await _service.getSpeakerAliasMemberIds(aliasKeys);
+
+    for (final speech in _speeches) {
+      if (speech.memberId != null || !speech.hasNamedSpeaker) continue;
+
+      final partyHint = _partyHintForSpeech(speech);
+      final keysForSpeech = _aliasKeysForSpeech(speech);
+
+      Member? match;
+
+      for (final key in keysForSpeech) {
+        final memberId = cachedAliases[key];
+        if (memberId == null) continue;
+        match = _memberCache[memberId] ?? lookup.memberById(memberId);
+        if (match != null) break;
+      }
+
+      match ??= lookup.matchExact(
+        _personNameCandidatesForSpeech(speech),
+        partyHint: partyHint,
+      );
+
+      match ??= lookup.matchFuzzy(
+        _nameCandidatesForSpeech(speech),
+        partyHint: partyHint,
+      );
+
+      if (match == null) continue;
+      _speechMemberCache[speech.id] = match;
+      _memberCache[match.id] = match;
+      for (final key in keysForSpeech) {
+        aliasUpdates[key] = match.id;
+      }
+    }
+
+    await _service.saveSpeakerAliasMemberIds(aliasUpdates);
+  }
+
+  List<Speech> _normaliseSpeeches(List<Speech> raw) {
+    _timeAnchors.clear();
+    final result = <Speech>[];
+    int displayIndex = 0;
+    String? lastProceduralNormalized;
+    final redundantDatePhrases = _redundantDatePhrases();
+
+    int i = 0;
+    while (i < raw.length) {
+      final speech = raw[i];
+      if (speech.isTimestamp) {
+        final seconds =
+            _parseTimeToSeconds(speech.timecode ?? speech.speechText);
+        if (seconds != null) {
+          if (_timeAnchors.isNotEmpty &&
+              _timeAnchors.last.index == displayIndex) {
+            _timeAnchors[_timeAnchors.length - 1] = _TimeAnchor(
+              index: displayIndex.toDouble(),
+              secondsSinceMidnight: seconds,
+            );
+          } else {
+            _timeAnchors.add(
+              _TimeAnchor(
+                index: displayIndex.toDouble(),
+                secondsSinceMidnight: seconds,
+              ),
+            );
+          }
+        }
+        i++;
+        continue;
+      }
+
+      if (speech.isDateHeading) {
+        i++;
+        continue;
+      }
+
+      if (speech.isProceduralText) {
+        final normalized = speech.speechText.trim().toLowerCase();
+        if (normalized.isEmpty) {
+          i++;
+          continue;
+        }
+        if (redundantDatePhrases.contains(_normalizeForCompare(normalized))) {
+          i++;
+          continue;
+        }
+        // Reduce repetitive procedural headings often repeated in source blocks.
+        if (normalized == lastProceduralNormalized) {
+          i++;
+          continue;
+        }
+        lastProceduralNormalized = normalized;
+
+        final mergedCommittee = _mergeCommitteeMembershipLines(
+          raw: raw,
+          startIndex: i,
+          redundantDatePhrases: redundantDatePhrases,
+        );
+        if (mergedCommittee != null) {
+          result.add(mergedCommittee.speech);
+          displayIndex++;
+          i = mergedCommittee.nextIndex;
+          continue;
+        }
+      } else {
+        lastProceduralNormalized = null;
+      }
+
+      result.add(speech);
+      displayIndex++;
+      i++;
+    }
+
+    return result;
+  }
+
+  _MergedProceduralBlock? _mergeCommitteeMembershipLines({
+    required List<Speech> raw,
+    required int startIndex,
+    required Set<String> redundantDatePhrases,
+  }) {
+    final head = raw[startIndex];
+    if (!_isCommitteeMembershipHeading(head.speechText)) {
+      return null;
+    }
+
+    final lines = <String>[head.speechText.trim()];
+    int i = startIndex + 1;
+    while (i < raw.length) {
+      final next = raw[i];
+      if (!next.isProceduralText || next.isTimestamp) break;
+      final text = next.speechText.trim();
+      if (text.isEmpty) {
+        i++;
+        continue;
+      }
+
+      final normalized = _normalizeForCompare(text);
+      if (redundantDatePhrases.contains(normalized)) break;
+      if (_isCommitteeMembershipHeading(text)) {
+        i++;
+        continue;
+      }
+
+      lines.add(_formatCommitteeRosterLine(text));
+      final lower = text.toLowerCase();
+      if (lower.contains('attended the committee')) {
+        i++;
+        break;
+      }
+
+      if (lines.length >= 40) {
+        i++;
+        break;
+      }
+
+      i++;
+    }
+
+    if (lines.length == 1) {
+      return _MergedProceduralBlock(speech: head, nextIndex: startIndex + 1);
+    }
+
+    return _MergedProceduralBlock(
+      speech: Speech(
+        id: head.id,
+        debateId: head.debateId,
+        debateTitle: head.debateTitle,
+        itemType: head.itemType,
+        memberId: head.memberId,
+        memberName: head.memberName,
+        attributedTo: head.attributedTo,
+        speechText: lines.join('\n'),
+        timecode: head.timecode,
+        orderIndex: head.orderIndex,
+      ),
+      nextIndex: i,
+    );
+  }
+
+  bool _isCommitteeMembershipHeading(String text) {
+    return text
+        .toLowerCase()
+        .contains('the committee consisted of the following members:');
+  }
+
+  String _formatCommitteeRosterLine(String text) {
+    return text.replaceFirst(RegExp(r'^\s*†\s*'), '• ');
+  }
+
+  String _computePrimaryDebateTitle(List<Speech> speeches) {
+    final counts = <String, int>{};
+    final firstSeen = <String, int>{};
+    int seq = 0;
+    for (final speech in speeches) {
+      final title = speech.debateTitle.trim();
+      if (title.isEmpty) continue;
+      counts[title] = (counts[title] ?? 0) + 1;
+      firstSeen.putIfAbsent(title, () => seq++);
+    }
+    if (counts.isEmpty) return '';
+    final sorted = counts.entries.toList()
+      ..sort((a, b) {
+        final byCount = b.value.compareTo(a.value);
+        if (byCount != 0) return byCount;
+        return (firstSeen[a.key] ?? 0).compareTo(firstSeen[b.key] ?? 0);
+      });
+    return sorted.first.key;
+  }
+
+  Set<String> _redundantDatePhrases() {
+    final parsedDate = DateTime.tryParse(date);
+    if (parsedDate == null) return const <String>{};
+
+    const weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+
+    final withComma =
+        '${weekdays[parsedDate.weekday - 1]}, ${parsedDate.day} ${months[parsedDate.month - 1]} ${parsedDate.year}';
+    final withoutComma =
+        '${weekdays[parsedDate.weekday - 1]} ${parsedDate.day} ${months[parsedDate.month - 1]} ${parsedDate.year}';
+
+    return {
+      _normalizeForCompare(withComma),
+      _normalizeForCompare(withoutComma),
+    };
+  }
+
+  String _normalizeForCompare(String text) {
+    return text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[,]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  List<String> _nameCandidatesForSpeech(Speech speech) {
+    final candidates = <String>[];
+    final directName = speech.memberName.trim();
+    if (directName.isNotEmpty) candidates.add(directName);
+
+    final attribution = speech.attributedTo.trim();
+    if (attribution.isNotEmpty) {
+      final lead = attribution.split('(').first.trim();
+      if (lead.isNotEmpty) candidates.add(lead);
+      for (final match in RegExp(r'\(([^)]+)\)').allMatches(attribution)) {
+        final bracketed = (match.group(1) ?? '').trim();
+        if (bracketed.isEmpty) continue;
+        if (_canonicalPartyToken(bracketed) != null) continue;
+        candidates.add(bracketed);
+      }
+    }
+    return candidates.toSet().toList();
+  }
+
+  List<String> _personNameCandidatesForSpeech(Speech speech) {
+    final candidates = <String>[];
+    final directName = speech.memberName.trim();
+    if (directName.isNotEmpty) candidates.add(directName);
+
+    final attribution = speech.attributedTo.trim();
+    for (final match in RegExp(r'\(([^)]+)\)').allMatches(attribution)) {
+      final bracketed = (match.group(1) ?? '').trim();
+      if (bracketed.isEmpty) continue;
+      if (_canonicalPartyToken(bracketed) != null) continue;
+      candidates.add(bracketed);
+    }
+
+    final lead = attribution.split('(').first.trim();
+    if (lead.isNotEmpty && !_looksLikeOfficeTitle(lead)) {
+      candidates.add(lead);
+    }
+    return candidates.toSet().toList();
+  }
+
+  List<String> _aliasKeysForSpeech(Speech speech) {
+    final keys = <String>{};
+    final attribution = speech.attributedTo.trim();
+    if (attribution.isNotEmpty) {
+      keys.add('attr:${_normalizeAliasKey(attribution)}');
+      final lead = attribution.split('(').first.trim();
+      if (lead.isNotEmpty && _looksLikeOfficeTitle(lead)) {
+        keys.add('office:$date:${_normalizeAliasKey(lead)}');
+      }
+    }
+
+    final name = speech.memberName.trim();
+    if (name.isNotEmpty) {
+      keys.add('name:${_normalizeAliasKey(name)}');
+    }
+    return keys.toList();
+  }
+
+  String _normalizeAliasKey(String raw) {
+    return raw
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  bool _looksLikeOfficeTitle(String value) {
+    final v = value.toLowerCase().trim();
+    if (v.startsWith('the ')) return true;
+    return v.contains('secretary') ||
+        v.contains('minister') ||
+        v.contains('whip') ||
+        v.contains('spokesperson') ||
+        v.contains('attorney') ||
+        v.contains('advocate') ||
+        v.contains('commissioner') ||
+        v.contains('speaker') ||
+        v.contains('captain of');
+  }
+
+  String? _partyHintForSpeech(Speech speech) {
+    for (final match
+        in RegExp(r'\(([^)]+)\)').allMatches(speech.attributedTo)) {
+      final candidate = (match.group(1) ?? '').trim();
+      final token = _canonicalPartyToken(candidate);
+      if (token != null) return token;
+    }
+    return null;
+  }
+
+  String? _canonicalPartyToken(String value) {
+    final raw = value.toLowerCase().trim();
+    final norm = raw.replaceAll(RegExp(r'[^a-z]'), '');
+    if (norm.isEmpty) return null;
+
+    if (norm == 'lab' ||
+        norm == 'labour' ||
+        norm == 'labourcooperative' ||
+        norm == 'labcoop' ||
+        raw.contains('lab co-op')) {
+      return 'labour';
+    }
+    if (norm == 'con' ||
+        norm == 'conservative' ||
+        norm == 'conservativeparty') {
+      return 'conservative';
+    }
+    if (norm == 'ld' ||
+        norm == 'libdem' ||
+        norm == 'liberaldemocrat' ||
+        norm == 'liberaldemocrats' ||
+        raw.contains('lib dem')) {
+      return 'libdem';
+    }
+    if (norm == 'snp' || norm == 'scottishnationalparty') return 'snp';
+    if (norm == 'green' || raw.contains('green party')) return 'green';
+    if (norm == 'plaidcymru') return 'plaidcymru';
+    if (norm == 'sinnfein') return 'sinnfein';
+    if (norm == 'dup' || norm == 'democraticunionistparty') return 'dup';
+    if (norm == 'uup' || norm == 'ulsterunionistparty') return 'uup';
+    if (norm == 'alliance' || norm == 'allianceparty') return 'alliance';
+    if (norm == 'cb' || norm == 'crossbench' || raw.contains('crossbench')) {
+      return 'crossbench';
+    }
+    if (norm == 'nonaffiliated' || norm == 'independent') return 'independent';
+    if (norm == 'reform' || norm == 'reformuk') return 'reform';
+    return null;
+  }
+
+  int? _parseTimeToSeconds(String raw) {
+    final parts = raw.trim().split(':');
+    if (parts.length < 2 || parts.length > 3) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final s = parts.length == 3 ? int.tryParse(parts[2]) : 0;
+    if (h == null || m == null || s == null) return null;
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
+    return (h * 3600) + (m * 60) + s;
+  }
+
+  String _formatTimeToNearestMinute(int secondsSinceMidnight) {
+    final roundedMinutes = ((secondsSinceMidnight + 30) ~/ 60) % (24 * 60);
+    final h = (roundedMinutes ~/ 60).toString().padLeft(2, '0');
+    final m = (roundedMinutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    super.dispose();
+  }
+}
+
+class _TimeAnchor {
+  final double index;
+  final int secondsSinceMidnight;
+
+  const _TimeAnchor({
+    required this.index,
+    required this.secondsSinceMidnight,
+  });
+}
+
+class _MergedProceduralBlock {
+  final Speech speech;
+  final int nextIndex;
+
+  const _MergedProceduralBlock({
+    required this.speech,
+    required this.nextIndex,
+  });
+}
+
+class _MemberLookupIndex {
+  final List<_MemberCandidate> _candidates;
+  final Map<String, List<_MemberCandidate>> _exactByNormalizedName;
+  final Map<int, _MemberCandidate> _byId;
+
+  _MemberLookupIndex(List<Member> members)
+      : _candidates = members.map(_MemberCandidate.fromMember).toList(),
+        _exactByNormalizedName = {},
+        _byId = {} {
+    for (final candidate in _candidates) {
+      _byId[candidate.member.id] = candidate;
+      _exactByNormalizedName
+          .putIfAbsent(candidate.normalizedName, () => <_MemberCandidate>[])
+          .add(candidate);
+    }
+  }
+
+  Member? memberById(int memberId) => _byId[memberId]?.member;
+
+  Member? matchExact(List<String> nameCandidates, {String? partyHint}) {
+    for (final raw in nameCandidates) {
+      final normalized = _MemberCandidate.normalizeName(raw);
+      if (normalized.isEmpty) continue;
+      final exactMatches = _exactByNormalizedName[normalized];
+      if (exactMatches != null && exactMatches.isNotEmpty) {
+        return _pickByParty(exactMatches, partyHint).member;
+      }
+    }
+    return null;
+  }
+
+  Member? matchFuzzy(List<String> nameCandidates, {String? partyHint}) {
+    _MemberCandidate? best;
+    double bestScore = 0;
+    for (final raw in nameCandidates) {
+      final probe = _MemberCandidate.normalizeName(raw);
+      if (probe.isEmpty) continue;
+      final probeTokens = probe.split(' ').where((t) => t.isNotEmpty).toSet();
+      if (probeTokens.isEmpty) continue;
+
+      for (final candidate in _candidates) {
+        final score = _tokenOverlap(probeTokens, candidate.tokens);
+        if (score > bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+    }
+
+    if (best == null || bestScore < 0.67) return null;
+    if (partyHint == null || best.partyToken == null) return best.member;
+    if (partyHint == best.partyToken) return best.member;
+    return null;
+  }
+
+  _MemberCandidate _pickByParty(List<_MemberCandidate> options, String? party) {
+    if (party == null) return options.first;
+    for (final option in options) {
+      if (option.partyToken == party) return option;
+    }
+    return options.first;
+  }
+
+  double _tokenOverlap(Set<String> a, Set<String> b) {
+    if (a.isEmpty || b.isEmpty) return 0;
+    final intersection = a.intersection(b).length.toDouble();
+    return intersection / a.length;
+  }
+}
+
+class _MemberCandidate {
+  final Member member;
+  final String normalizedName;
+  final Set<String> tokens;
+  final String? partyToken;
+
+  _MemberCandidate({
+    required this.member,
+    required this.normalizedName,
+    required this.tokens,
+    required this.partyToken,
+  });
+
+  factory _MemberCandidate.fromMember(Member member) {
+    final normalized = normalizeName(member.name);
+    final tokens = normalized.split(' ').where((t) => t.isNotEmpty).toSet();
+    return _MemberCandidate(
+      member: member,
+      normalizedName: normalized,
+      tokens: tokens,
+      partyToken: _normalizeParty(
+        member.partyAbbreviation.isNotEmpty
+            ? member.partyAbbreviation
+            : member.party,
+      ),
+    );
+  }
+
+  static String normalizeName(String raw) {
+    return raw
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static String? _normalizeParty(String raw) {
+    final normalized = raw.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (normalized.isEmpty) return null;
+    if (normalized == 'lab' ||
+        normalized == 'labour' ||
+        normalized == 'labourcooperative' ||
+        normalized == 'labcoop') {
+      return 'labour';
+    }
+    if (normalized == 'con' || normalized == 'conservative') {
+      return 'conservative';
+    }
+    if (normalized == 'ld' ||
+        normalized == 'libdem' ||
+        normalized == 'liberaldemocrat') {
+      return 'libdem';
+    }
+    if (normalized == 'snp' || normalized == 'scottishnationalparty') {
+      return 'snp';
+    }
+    return normalized;
   }
 }
