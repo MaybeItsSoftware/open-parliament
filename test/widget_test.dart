@@ -72,8 +72,8 @@ void main() {
           ChangeNotifierProvider.value(value: ThemeService()),
           Provider<ParliamentaryDataService>.value(value: fakeService),
         ],
-        child: MaterialApp(
-          home: const DateSelectorView(),
+        child: const MaterialApp(
+          home: DateSelectorView(),
         ),
       ),
     );
