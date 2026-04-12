@@ -3,6 +3,8 @@ class Speech {
   final String id;
   final String debateId;
   final String debateTitle;
+  final String itemType;
+  final String hrsTag;
   final int? memberId;
   final String memberName;
   final String attributedTo;
@@ -14,6 +16,8 @@ class Speech {
     required this.id,
     required this.debateId,
     required this.debateTitle,
+    this.itemType = 'Contribution',
+    this.hrsTag = '',
     this.memberId,
     required this.memberName,
     required this.attributedTo,
@@ -31,6 +35,10 @@ class Speech {
     required String debateTitle,
     required int orderIndex,
   }) {
+    final itemType = _asString(json['ItemType']) ??
+        _asString(json['itemType']) ??
+        'Contribution';
+    final hrsTag = _asString(json['HRSTag']) ?? _asString(json['hrsTag']) ?? '';
     final attribution = _asString(json['AttributedTo']) ??
         _asString(json['attributedTo']) ??
         '';
@@ -40,6 +48,13 @@ class Speech {
     final rawMemberId = json['MemberId'] ?? json['memberId'];
     final rawText = _asString(json['Value']) ?? _asString(json['value']) ?? '';
     final parsedMemberId = _asInt(rawMemberId);
+    final strippedText = _stripHtml(rawText);
+    final rawTimecode =
+        _asString(json['Timecode']) ?? _asString(json['timecode']);
+    final effectiveTimecode = rawTimecode ??
+        ((itemType.toLowerCase() == 'timestamp' && _isClockTime(strippedText))
+            ? strippedText
+            : null);
 
     return Speech(
       id: _asString(json['ItemId']) ??
@@ -47,11 +62,13 @@ class Speech {
           '${debateId}_$orderIndex',
       debateId: debateId,
       debateTitle: debateTitle,
+      itemType: itemType,
+      hrsTag: hrsTag,
       memberId: parsedMemberId,
       memberName: memberName,
       attributedTo: attribution,
-      speechText: _stripHtml(rawText),
-      timecode: _asString(json['Timecode']) ?? _asString(json['timecode']),
+      speechText: strippedText,
+      timecode: effectiveTimecode,
       orderIndex: orderIndex,
     );
   }
@@ -62,6 +79,8 @@ class Speech {
       id: (row['id'] as String?) ?? '',
       debateId: (row['debate_id'] as String?) ?? '',
       debateTitle: (row['debate_title'] as String?) ?? '',
+      itemType: (row['item_type'] as String?) ?? 'Contribution',
+      hrsTag: (row['hrs_tag'] as String?) ?? '',
       memberId: row['member_id'] as int?,
       memberName: (row['member_name'] as String?) ?? '',
       attributedTo: (row['attributed_to'] as String?) ?? '',
@@ -76,6 +95,8 @@ class Speech {
         'id': id,
         'debate_id': debateId,
         'debate_title': debateTitle,
+        'item_type': itemType,
+        'hrs_tag': hrsTag,
         'member_id': memberId,
         'member_name': memberName,
         'attributed_to': attributedTo,
@@ -84,14 +105,49 @@ class Speech {
         'order_idx': orderIndex,
       };
 
+  bool get hasNamedSpeaker {
+    if (memberId != null) return true;
+    if (memberName.trim().isNotEmpty) return true;
+    if (attributedTo.trim().isNotEmpty) return true;
+    return false;
+  }
+
+  bool get isTimestamp {
+    if (itemType.toLowerCase() == 'timestamp') return true;
+    return !hasNamedSpeaker && _isClockTime(speechText);
+  }
+
+  bool get isDateHeading => hrsTag.toLowerCase() == 'hs_date';
+  bool get isQuote => hrsTag.toLowerCase() == 'hs_quote';
+  bool get isTabledBy => hrsTag.toLowerCase() == 'hs_tabledby';
+
+  bool get isProceduralText => !isTimestamp && !hasNamedSpeaker;
+
+  String? get displayTime {
+    final source = (timecode ?? speechText).trim();
+    if (!_isClockTime(source)) return null;
+    final parts = source.split(':');
+    if (parts.length < 2) return source;
+    return '${parts[0]}:${parts[1]}';
+  }
+
   /// Strips basic HTML tags and decodes common HTML entities to plain text.
   static String _stripHtml(String html) {
     final text = html
+        .replaceAll(
+          RegExp(
+            r'<span[^>]*class\s*=\s*"column-number"[^>]*>.*?</span>',
+            caseSensitive: false,
+            dotAll: true,
+          ),
+          '',
+        )
         .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
         .replaceAll(RegExp(r'</p\s*>', caseSensitive: false), '\n\n')
         .replaceAll(RegExp(r'<[^>]+>'), '')
         .replaceAll('&nbsp;', ' ')
         .replaceAll('&amp;', '&')
+        .replaceAll('&mdash;', '—')
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
@@ -113,6 +169,9 @@ class Speech {
     if (value is String) return int.tryParse(value);
     return null;
   }
+
+  static bool _isClockTime(String value) =>
+      RegExp(r'^\d{1,2}:\d{2}(:\d{2})?$').hasMatch(value.trim());
 
   @override
   bool operator ==(Object other) => other is Speech && other.id == id;

@@ -30,7 +30,7 @@ class DatabaseService {
     final path = await membersDbPath();
     return openDatabase(
       path,
-      version: 1,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE members (
@@ -47,6 +47,31 @@ class DatabaseService {
             value TEXT
           )
         ''');
+        await db.execute('''
+          CREATE TABLE speaker_aliases (
+            alias_key  TEXT PRIMARY KEY,
+            member_id  INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX idx_speaker_aliases_member ON speaker_aliases(member_id)',
+        );
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS speaker_aliases (
+              alias_key  TEXT PRIMARY KEY,
+              member_id  INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_speaker_aliases_member
+            ON speaker_aliases(member_id)
+          ''');
+        }
       },
     );
   }
@@ -64,7 +89,7 @@ class DatabaseService {
     final path = await sittingDbPath(date);
     return openDatabase(
       path,
-      version: 1,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE debates (
@@ -79,6 +104,8 @@ class DatabaseService {
             id           TEXT    PRIMARY KEY,
             debate_id    TEXT    NOT NULL,
             debate_title TEXT,
+            item_type    TEXT,
+            hrs_tag      TEXT,
             member_id    INTEGER,
             member_name  TEXT,
             attributed_to TEXT,
@@ -94,6 +121,14 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX idx_speeches_member ON speeches(member_id)',
         );
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE speeches ADD COLUMN item_type TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE speeches ADD COLUMN hrs_tag TEXT');
+        }
       },
     );
   }

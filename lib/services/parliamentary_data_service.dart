@@ -36,32 +36,70 @@ class ParliamentaryDataService {
   /// than [_membersCacheTtl] (30 days).
   Future<List<Member>> getMembers() async {
     final db = await _db.openMembersDb();
-    try {
-      if (await _isMembersCacheFresh(db)) {
-        return _loadMembersFromDb(db);
-      }
-      return _fetchAndCacheMembers(db);
-    } finally {
-      await db.close();
+    if (await _isMembersCacheFresh(db)) {
+      return _loadMembersFromDb(db);
     }
+    return _fetchAndCacheMembers(db);
   }
 
   /// Returns a single member by [memberId] from the local cache, or `null` if
   /// not found.
   Future<Member?> getMemberById(int memberId) async {
     final db = await _db.openMembersDb();
-    try {
-      final rows = await db.query(
-        'members',
-        where: 'id = ?',
-        whereArgs: [memberId],
-        limit: 1,
-      );
-      if (rows.isEmpty) return null;
-      return Member.fromDb(rows.first);
-    } finally {
-      await db.close();
-    }
+    final rows = await db.query(
+      'members',
+      where: 'id = ?',
+      whereArgs: [memberId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Member.fromDb(rows.first);
+  }
+
+  /// Returns resolved member IDs for previously learned speaker alias keys.
+  Future<Map<String, int>> getSpeakerAliasMemberIds(
+    Iterable<String> aliasKeys,
+  ) async {
+    final keys = aliasKeys.where((k) => k.trim().isNotEmpty).toSet().toList();
+    if (keys.isEmpty) return const <String, int>{};
+
+    final db = await _db.openMembersDb();
+    final placeholders = List.filled(keys.length, '?').join(',');
+    final rows = await db.query(
+      'speaker_aliases',
+      columns: ['alias_key', 'member_id'],
+      where: 'alias_key IN ($placeholders)',
+      whereArgs: keys,
+    );
+
+    return {
+      for (final row in rows)
+        (row['alias_key'] as String): (row['member_id'] as num).toInt(),
+    };
+  }
+
+  /// Persists resolved speaker alias keys for future transcripts.
+  Future<void> saveSpeakerAliasMemberIds(
+      Map<String, int> aliasToMemberId) async {
+    if (aliasToMemberId.isEmpty) return;
+
+    final db = await _db.openMembersDb();
+    final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      for (final entry in aliasToMemberId.entries) {
+        final key = entry.key.trim();
+        if (key.isEmpty) continue;
+        await txn.insert(
+          'speaker_aliases',
+          {
+            'alias_key': key,
+            'member_id': entry.value,
+            'updated_at': now,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
 
   // ─── Sittings ─────────────────────────────────────────────────────────────
@@ -82,6 +120,30 @@ class ParliamentaryDataService {
   /// Returns `true` when a local cache already exists for [date].
   Future<bool> isSittingCached(String date) => _db.sittingDbExists(date);
 
+  /// Returns `true` if [date] has Hansard sitting content in at least one house.
+  Future<bool> hasSittingData(String date) async {
+    final alreadyCached = await _db.sittingDbExists(date);
+    if (alreadyCached) {
+      final cachedSpeeches = await _loadSpeechesFromDb(date);
+      return cachedSpeeches.isNotEmpty;
+    }
+
+    final debates = await _hansardApi.fetchSittingDebates(date);
+    return debates.isNotEmpty;
+  }
+
+  /// Returns the closest previous parliamentary sitting date before [date].
+  Future<DateTime?> getPreviousSittingDate(String date) async {
+    final linked = await _hansardApi.fetchLinkedSittingDates(date);
+    return linked.previousSittingDate;
+  }
+
+  /// Returns the closest next parliamentary sitting date after [date].
+  Future<DateTime?> getNextSittingDate(String date) async {
+    final linked = await _hansardApi.fetchLinkedSittingDates(date);
+    return linked.nextSittingDate;
+  }
+
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   Future<bool> _isMembersCacheFresh(Database db) async {
@@ -94,8 +156,7 @@ class ParliamentaryDataService {
     if (rows.isEmpty) return false;
 
     final ts = int.tryParse(rows.first['value'] as String? ?? '0') ?? 0;
-    final lastFetched =
-        DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true);
+    final lastFetched = DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true);
     return DateTime.now().toUtc().difference(lastFetched) < _membersCacheTtl;
   }
 
@@ -158,40 +219,32 @@ class ParliamentaryDataService {
     List<Speech> speeches,
   ) async {
     final db = await _db.openSittingDb(date);
-    try {
-      await db.transaction((txn) async {
-        for (final d in debates) {
-          await txn.insert(
-            'debates',
-            d.toDb(),
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
+    await db.transaction((txn) async {
+      for (final d in debates) {
+        await txn.insert(
+          'debates',
+          d.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
 
-        for (final s in speeches) {
-          await txn.insert(
-            'speeches',
-            s.toDb(),
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
-      });
-    } finally {
-      await db.close();
-    }
+      for (final s in speeches) {
+        await txn.insert(
+          'speeches',
+          s.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
 
   Future<List<Speech>> _loadSpeechesFromDb(String date) async {
     final db = await _db.openSittingDb(date);
-    try {
-      final rows = await db.query(
-        'speeches',
-        orderBy: 'order_idx ASC',
-      );
-      return rows.map(Speech.fromDb).toList();
-    } finally {
-      await db.close();
-    }
+    final rows = await db.query(
+      'speeches',
+      orderBy: 'order_idx ASC',
+    );
+    return rows.map(Speech.fromDb).toList();
   }
 
   void dispose() {

@@ -63,7 +63,27 @@ class _TranscriptViewState extends State<TranscriptView> {
       child: Scaffold(
         key: _scaffoldKey,
         appBar: AppBar(
-          title: Text(widget.displayDate),
+          title: Consumer<TranscriptViewModel>(
+            builder: (context, vm, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  (vm.primaryDebateTitle != null &&
+                          vm.primaryDebateTitle!.isNotEmpty)
+                      ? vm.primaryDebateTitle!
+                      : 'Hansard Debate',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  widget.displayDate,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+              ],
+            ),
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.people),
@@ -73,18 +93,29 @@ class _TranscriptViewState extends State<TranscriptView> {
           ],
         ),
         endDrawer: _buildSpeakerDrawer(),
-        body: Consumer<TranscriptViewModel>(
-          builder: (context, vm, _) {
-            if (vm.isLoading) {
-              return _buildLoadingIndicator();
-            }
-            if (vm.error != null) {
-              return _buildErrorView(vm.error!);
-            }
-            if (vm.speeches.isEmpty) {
-              return _buildEmptyView();
-            }
-            return _buildTranscriptList(vm);
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final maxWidth = constraints.maxWidth >= 1200 ? 1080.0 : 920.0;
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: Consumer<TranscriptViewModel>(
+                  builder: (context, vm, _) {
+                    if (vm.isLoading) {
+                      return _buildLoadingIndicator();
+                    }
+                    if (vm.error != null) {
+                      return _buildErrorView(vm.error!);
+                    }
+                    if (vm.speeches.isEmpty) {
+                      return _buildEmptyView();
+                    }
+                    return _buildTranscriptList(vm);
+                  },
+                ),
+              ),
+            );
           },
         ),
       ),
@@ -141,7 +172,9 @@ class _TranscriptViewState extends State<TranscriptView> {
           Icon(Icons.article_outlined, size: 48, color: Colors.grey),
           SizedBox(height: 16),
           Text(
-            'No sitting data available for this date.',
+            'No sitting transcript available for this date.\n'
+            'Parliament may be in recess.',
+            textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey),
           ),
         ],
@@ -162,9 +195,14 @@ class _TranscriptViewState extends State<TranscriptView> {
       itemPositionsListener: _positionsListener,
       itemBuilder: (context, index) {
         final speech = vm.speeches[index];
-        final member = vm.memberFor(speech.memberId);
+        final member = vm.memberForSpeech(speech);
+        final timeLabel = vm.estimatedTimeForSpeechIndex(index);
         return RepaintBoundary(
-          child: SpeechBlock(speech: speech, member: member),
+          child: SpeechBlock(
+            speech: speech,
+            member: member,
+            timeLabel: timeLabel,
+          ),
         );
       },
     );
