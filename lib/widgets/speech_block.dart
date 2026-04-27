@@ -56,6 +56,11 @@ class SpeechBlock extends StatelessWidget {
       return _buildInChairBanner(theme, chairName);
     }
 
+    final roster = _CommitteeRoster.tryParse(speech.speechText);
+    if (roster != null) {
+      return _buildCommitteeRoster(theme, roster);
+    }
+
     if (speech.isTabledBy) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
@@ -88,6 +93,179 @@ class SpeechBlock extends StatelessWidget {
         textAlign: TextAlign.justify,
       ),
     );
+  }
+
+  /// Structured card for "The Committee consisted of the following Members:"
+  /// blocks. Replaces a long italic paragraph with a chair pill row,
+  /// per-member rows with party badges, and a clerks footer.
+  Widget _buildCommitteeRoster(ThemeData theme, _CommitteeRoster roster) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant,
+          ),
+          color: theme.colorScheme.surfaceContainerLow,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.groups_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Committee membership',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+              if (roster.chairs.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _buildChairsRow(theme, roster.chairs),
+              ],
+              if (roster.members.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final twoCol = constraints.maxWidth >= 560;
+                    return _buildMemberList(theme, roster.members, twoCol);
+                  },
+                ),
+              ],
+              if (roster.clerks.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Divider(height: 1, color: theme.dividerColor),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.assignment_outlined,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: RichText(
+                        text: TextSpan(
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          children: [
+                            const TextSpan(
+                              text: 'Clerks: ',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            TextSpan(text: roster.clerks),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (roster.attendedAny) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle,
+                      size: 12,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'attended the Committee',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChairsRow(ThemeData theme, List<_CommitteeChair> chairs) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            chairs.length == 1 ? 'Chair' : 'Chairs',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final chair in chairs)
+                _ChairPill(name: chair.name, attended: chair.attended),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMemberList(
+    ThemeData theme,
+    List<_CommitteeMember> members,
+    bool twoCol,
+  ) {
+    if (!twoCol) {
+      return Column(
+        children: [
+          for (final m in members) _MemberRow(member: m),
+        ],
+      );
+    }
+    final rows = <Widget>[];
+    for (var i = 0; i < members.length; i += 2) {
+      final left = members[i];
+      final right = i + 1 < members.length ? members[i + 1] : null;
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _MemberRow(member: left)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: right != null
+                  ? _MemberRow(member: right)
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      );
+    }
+    return Column(children: rows);
   }
 
   /// Centred divider banner for the Prayers entry at the start of a sitting.
@@ -755,4 +933,333 @@ class _SpeakerIdentity {
     required this.constituency,
     required this.partyFromAttribution,
   });
+}
+
+class _CommitteeChair {
+  final String name;
+  final bool attended;
+  const _CommitteeChair({required this.name, required this.attended});
+}
+
+class _CommitteeMember {
+  final String name;
+  final String constituency;
+  final String role;
+  final String party;
+  final bool attended;
+
+  const _CommitteeMember({
+    required this.name,
+    required this.constituency,
+    required this.role,
+    required this.party,
+    required this.attended,
+  });
+}
+
+/// Parsed structure of the multi-line "Committee consisted of the following
+/// Members:" procedural block produced by the transcript view-model's merger.
+class _CommitteeRoster {
+  final List<_CommitteeChair> chairs;
+  final List<_CommitteeMember> members;
+  final String clerks;
+
+  const _CommitteeRoster({
+    required this.chairs,
+    required this.members,
+    required this.clerks,
+  });
+
+  bool get attendedAny =>
+      chairs.any((c) => c.attended) || members.any((m) => m.attended);
+
+  static _CommitteeRoster? tryParse(String fullText) {
+    final raw = fullText.trim();
+    if (raw.isEmpty) return null;
+    final lines = raw
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (lines.length < 2) return null;
+    if (!lines.first
+        .toLowerCase()
+        .contains('the committee consisted of the following members:')) {
+      return null;
+    }
+
+    final chairs = <_CommitteeChair>[];
+    final members = <_CommitteeMember>[];
+    String clerks = '';
+
+    for (var i = 1; i < lines.length; i++) {
+      final line = lines[i];
+      final lower = line.toLowerCase();
+
+      if (lower.startsWith('chair:') || lower.startsWith('chairs:')) {
+        final tail = line.substring(line.indexOf(':') + 1);
+        chairs.addAll(_parseChairs(tail));
+        continue;
+      }
+
+      if (_isLegendLine(lower)) continue;
+
+      if (lower.contains('committee clerk')) {
+        clerks = _stripClerksSuffix(line);
+        continue;
+      }
+
+      final parsed = _parseMemberLine(line);
+      if (parsed != null) members.add(parsed);
+    }
+
+    if (chairs.isEmpty && members.isEmpty) return null;
+    return _CommitteeRoster(
+      chairs: chairs,
+      members: members,
+      clerks: clerks,
+    );
+  }
+
+  static bool _isLegendLine(String lower) {
+    final stripped = lower.replaceFirst(RegExp(r'^[•†]\s*'), '');
+    return stripped.startsWith('attended the committee');
+  }
+
+  static String _stripClerksSuffix(String line) {
+    var text = line.replaceFirst(RegExp(r'^[•†]\s*'), '').trim();
+    text = text.replaceAll(
+      RegExp(r',\s*Committee Clerks?\.?\s*$', caseSensitive: false),
+      '',
+    );
+    return text.trim();
+  }
+
+  static List<_CommitteeChair> _parseChairs(String segment) {
+    return segment
+        .split(',')
+        .map((c) => c.trim())
+        .where((c) => c.isNotEmpty)
+        .map((c) {
+      final attended = c.startsWith('†');
+      final name =
+          attended ? c.replaceFirst(RegExp(r'^†\s*'), '').trim() : c;
+      return _CommitteeChair(name: name, attended: attended);
+    }).toList();
+  }
+
+  static _CommitteeMember? _parseMemberLine(String line) {
+    var text = line.trim();
+    if (text.isEmpty) return null;
+    var attended = false;
+    if (text.startsWith('•') || text.startsWith('†')) {
+      attended = true;
+      text = text.replaceFirst(RegExp(r'^[•†]\s*'), '').trim();
+    }
+    if (text.isEmpty) return null;
+
+    final parens = RegExp(r'\(([^)]+)\)').allMatches(text).toList();
+    if (parens.isEmpty) {
+      return _CommitteeMember(
+        name: text,
+        constituency: '',
+        role: '',
+        party: '',
+        attended: attended,
+      );
+    }
+    final name = text.substring(0, parens.first.start).trim().replaceAll(
+          RegExp(r',\s*$'),
+          '',
+        );
+    final brackets = parens
+        .map((m) => (m.group(1) ?? '').trim())
+        .where((b) => b.isNotEmpty)
+        .toList();
+
+    String constituency = '';
+    String role = '';
+    String party = '';
+    for (final b in brackets) {
+      if (party_util.canonicalPartyToken(b) != null) {
+        party = b;
+      } else if (constituency.isEmpty && !_looksLikeMinisterialRole(b)) {
+        constituency = b;
+      } else {
+        role = role.isEmpty ? b : '$role; $b';
+      }
+    }
+
+    return _CommitteeMember(
+      name: name,
+      constituency: constituency,
+      role: role,
+      party: party,
+      attended: attended,
+    );
+  }
+
+  static bool _looksLikeMinisterialRole(String value) {
+    final v = value.toLowerCase();
+    return v.contains('minister') ||
+        v.contains('treasury') ||
+        v.contains('secretary') ||
+        v.contains('whip') ||
+        v.contains('attorney') ||
+        v.contains('advocate') ||
+        v.contains('commissioner');
+  }
+}
+
+class _ChairPill extends StatelessWidget {
+  final String name;
+  final bool attended;
+  const _ChairPill({required this.name, required this.attended});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: theme.colorScheme.surfaceContainerHighest,
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (attended) ...[
+              Icon(
+                Icons.check_circle,
+                size: 12,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              name,
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MemberRow extends StatelessWidget {
+  final _CommitteeMember member;
+  const _MemberRow({required this.member});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final partyColor = party_util.partyColor(
+      member.party,
+      fallback: theme.colorScheme.outline,
+    );
+    final hasParty = member.party.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border(
+            left: BorderSide(color: partyColor, width: 3),
+          ),
+          color: hasParty
+              ? partyColor.withValues(alpha: 0.06)
+              : theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.4),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 14,
+                child: member.attended
+                    ? Icon(
+                        Icons.check_circle,
+                        size: 12,
+                        color: theme.colorScheme.primary,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      member.name,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (member.constituency.isNotEmpty)
+                      Text(
+                        member.constituency,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    if (member.role.isNotEmpty)
+                      Text(
+                        member.role,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (hasParty) ...[
+                const SizedBox(width: 6),
+                _PartyBadge(party: member.party, color: partyColor),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PartyBadge extends StatelessWidget {
+  final String party;
+  final Color color;
+  const _PartyBadge({required this.party, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+        ? Colors.white
+        : theme.colorScheme.onSurface;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        child: Text(
+          party,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            color: fg,
+          ),
+        ),
+      ),
+    );
+  }
 }
