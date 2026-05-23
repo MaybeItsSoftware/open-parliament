@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
 
 /// Low-level HTTP client for the official Parliament Members API.
@@ -242,6 +243,7 @@ class HansardApiService {
                 id: debateId,
                 title: title,
                 house: _resolveHouseLabel(currentHouse, section),
+                section: section,
                 orderIndex: orderIndex++,
               ),
             );
@@ -502,6 +504,84 @@ class LinkedSittingDates {
     required this.previousSittingDate,
     required this.nextSittingDate,
   });
+}
+
+/// Scrapes parliamentlive.tv's public search page to map a sitting day to
+/// the per-event GUIDs used by `https://parliamentlive.tv/event/index/{guid}`.
+///
+/// There is no documented JSON endpoint for this; the search HTML is the
+/// only canonical source. The shape we depend on is `<a href=".../Event/
+/// Index/{guid}">…<img alt="{title}">` which has been stable for years.
+class ParliamentLiveApiService {
+  static const String _baseUrl = 'https://parliamentlive.tv';
+
+  final http.Client _client;
+  final Map<String, List<ParliamentLiveEvent>> _cache = {};
+
+  ParliamentLiveApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  /// Returns every event that aired on [date] (`YYYY-MM-DD`). Both chambers
+  /// are included — the search page's House filter is too coarse for our
+  /// needs. The result is cached in-memory for the life of the service.
+  Future<List<ParliamentLiveEvent>> fetchEventsForDate(String date) async {
+    final cached = _cache[date];
+    if (cached != null) return cached;
+
+    final parts = date.split('-');
+    if (parts.length != 3) return const [];
+    final formatted = '${parts[2]}/${parts[1]}/${parts[0]}';
+
+    final uri = Uri.parse('$_baseUrl/Search').replace(
+      queryParameters: <String, String>{
+        'Start': formatted,
+        'End': formatted,
+      },
+    );
+
+    try {
+      final response = await _client.get(uri);
+      if (response.statusCode != 200) return const [];
+      final events = parseSearchHtml(response.body);
+      _cache[date] = events;
+      return events;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Extracts `(guid, title)` pairs from a parliamentlive.tv search page
+  /// response. Public so it can be unit-tested with a fixture.
+  static List<ParliamentLiveEvent> parseSearchHtml(String html) {
+    final pattern = RegExp(
+      r'href="https://parliamentlive\.tv/Event/Index/([a-f0-9-]{36})"[^>]*>\s*<img[^>]*\salt="([^"]+)"',
+      multiLine: true,
+    );
+    final seen = <String>{};
+    final events = <ParliamentLiveEvent>[];
+    for (final match in pattern.allMatches(html)) {
+      final guid = match.group(1)!;
+      if (!seen.add(guid)) continue;
+      events.add(
+        ParliamentLiveEvent(
+          guid: guid,
+          title: _decodeHtmlEntities(match.group(2)!).trim(),
+        ),
+      );
+    }
+    return events;
+  }
+
+  static String _decodeHtmlEntities(String s) {
+    return s
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>');
+  }
+
+  void dispose() => _client.close();
 }
 
 /// Exception thrown when a Hansard API request fails.

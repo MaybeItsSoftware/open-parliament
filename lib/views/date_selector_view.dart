@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/debate.dart';
+import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
 import 'settings_view.dart';
@@ -22,6 +24,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   static final DateTime _minDate = DateTime(2000, 1, 1);
   static const int _averageWordsPerMinute = 130;
   static const int _maxDurationMinutes = 24 * 60;
+  static const double _minDebateCardHeight = 72;
+  static const double _pixelsPerMinute = 3.5;
   static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
@@ -69,8 +73,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildTopBar(context),
-                            const SizedBox(height: 20),
                             _buildContextualDateSelector(
                               context,
                               vm,
@@ -101,33 +103,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           );
         },
       ),
-    );
-  }
-
-  Widget _buildTopBar(BuildContext context) {
-    return Row(
-      children: [
-        const Icon(Icons.public_outlined, size: 24),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            'Open Hansard',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          tooltip: 'Settings',
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const SettingsView()),
-          ),
-        ),
-      ],
     );
   }
 
@@ -174,6 +149,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                 ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
                 : null,
           ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SettingsView()),
+            ),
+          ),
         ],
       ),
     );
@@ -197,32 +179,35 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
             final item = items[index];
-            return Card(
-              child: ListTile(
-                title: Text(
-                  item.title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Row(
-                    children: [
-                      if (item.house.isNotEmpty) ...[
-                        _HousePill(item.house),
-                        const SizedBox(width: 6),
-                      ],
-                      Text(item.durationLabel),
-                    ],
+            return SizedBox(
+              height: _debateCardHeight(item.durationMinutes),
+              child: _HouseAccentCard(
+                house: item.house,
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  title: Text(
+                    item.title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      _navigateToTranscript(day, debateId: item.debateId),
                 ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _navigateToTranscript(day, debateId: item.debateId),
               ),
             );
           },
         );
       },
     );
+  }
+
+  double _debateCardHeight(int minutes) {
+    final clampedMinutes = minutes <= 0 ? 1 : minutes;
+    final scaled = clampedMinutes * _pixelsPerMinute;
+    return scaled < _minDebateCardHeight
+        ? _minDebateCardHeight
+        : scaled;
   }
 
   Future<void> _pickDate(DateSelectorViewModel vm, DateTime selectedDay) async {
@@ -293,35 +278,60 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       final houseByDebateId = {for (final d in debates) d.id: d.house};
       final titleByDebateId = {for (final d in debates) d.id: d.title};
       final orderByDebateId = {for (final d in debates) d.id: d.orderIndex};
+      final sectionByDebateId = {for (final d in debates) d.id: d.section};
 
       // Group speeches by root debate — sub-section speeches inherit the
       // most recently seen root debate ID.
       final wordCountsByDebateId = <String, int>{};
+      final firstTimecodeByDebateId = <String, String>{};
+      final hasMeaningfulSpeechByRoot = <String, bool>{};
       String? currentRoot;
       for (final speech in speeches) {
         if (rootIds.contains(speech.debateId)) {
           currentRoot = speech.debateId;
         }
         if (currentRoot == null) continue;
+        final timecode = _normalizedHansardTimecode(speech.timecode) ??
+            (speech.isTimestamp
+                ? _normalizedHansardTimecode(speech.speechText)
+                : null);
+        if (timecode != null) {
+          firstTimecodeByDebateId.putIfAbsent(currentRoot, () => timecode);
+        }
         wordCountsByDebateId[currentRoot] =
             (wordCountsByDebateId[currentRoot] ?? 0) +
                 _wordCount(speech.speechText);
+        if (_isMeaningfulSpeech(speech)) {
+          hasMeaningfulSpeechByRoot[currentRoot] = true;
+        }
       }
 
+      // Drop debates whose only content is the "House met at …" boilerplate.
+      final placeholderRoots = <String>{
+        for (final d in debates)
+          if (_isPlaceholderDebate(d, hasMeaningfulSpeechByRoot[d.id] ?? false))
+            d.id,
+      };
+
       if (wordCountsByDebateId.isEmpty) {
-        // No speeches yet — fall back to showing debate titles with no duration.
+        // No speeches yet — fall back to debate titles, still filtering out
+        // placeholders detectable from the title alone.
         return debates
+            .where((d) => !placeholderRoots.contains(d.id))
             .map((d) => _DebateFeedItem(
                   debateId: d.id,
                   title: d.title,
                   durationMinutes: 0,
                   house: d.house,
                   order: d.orderIndex,
+                  section: d.section,
+                  startTimecode: firstTimecodeByDebateId[d.id],
                 ))
             .toList();
       }
 
       final items = wordCountsByDebateId.entries
+          .where((entry) => !placeholderRoots.contains(entry.key))
           .map(
             (entry) => _DebateFeedItem(
               debateId: entry.key,
@@ -329,6 +339,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
               durationMinutes: _minutesFromWords(entry.value),
               house: houseByDebateId[entry.key] ?? '',
               order: orderByDebateId[entry.key] ?? 0,
+              section: sectionByDebateId[entry.key],
+              startTimecode: firstTimecodeByDebateId[entry.key],
             ),
           )
           .toList()
@@ -365,10 +377,47 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return _wordRegex.allMatches(text).length;
   }
 
+  /// A debate is a placeholder when it carries no real speech content —
+  /// only the "The House met at …" announcement. Detected by the title
+  /// pattern *and* the absence of any non-boilerplate speech.
+  static bool _isPlaceholderDebate(Debate debate, bool hasMeaningfulSpeech) {
+    if (hasMeaningfulSpeech) return false;
+    final title = debate.title.toLowerCase().trim();
+    if (_placeholderTitlePattern.hasMatch(title)) return true;
+    // No speech content and no detectable title — keep, to avoid hiding
+    // real debates that simply haven't been indexed yet.
+    return false;
+  }
+
+  static bool _isMeaningfulSpeech(Speech speech) {
+    if (speech.isSittingStartAnnouncement) return false;
+    if (speech.isTimestamp) return false;
+    if (speech.isDateHeading) return false;
+    return speech.speechText.trim().isNotEmpty;
+  }
+
+  static final RegExp _placeholderTitlePattern = RegExp(
+    r'^the\s+(house|lords|committee|grand\s+committee)\b.*\bmet\s+at\b',
+  );
+
   static int _minutesFromWords(int words) {
     return (words / _averageWordsPerMinute)
         .round()
         .clamp(1, _maxDurationMinutes);
+  }
+
+  static String? _normalizedHansardTimecode(String? value) {
+    if (value == null) return null;
+    final parts = value.trim().split(':');
+    if (parts.length < 2 || parts.length > 3) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final s = parts.length == 3 ? int.tryParse(parts[2]) : 0;
+    if (h == null || m == null || s == null) return null;
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
+    return '${h.toString().padLeft(2, '0')}:'
+        '${m.toString().padLeft(2, '0')}:'
+        '${s.toString().padLeft(2, '0')}';
   }
 
   void _navigateToTranscript(DateTime day, {String debateId = ''}) {
@@ -413,41 +462,49 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 }
 
-/// Small colored pill showing "Commons" or "Lords" on debate feed cards.
-class _HousePill extends StatelessWidget {
+class _HouseAccentCard extends StatelessWidget {
   final String house;
+  final Widget child;
 
-  const _HousePill(this.house);
+  const _HouseAccentCard({
+    required this.house,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final h = house.toLowerCase();
-    final color = (h.contains('lords') || h.contains('grand committee'))
-        ? const Color(0xFFB50938)
-        : (h.contains('westminster hall'))
-            ? const Color(0xFF006548)
-            : (h.contains('committee'))
-                ? const Color(0xFF1A5276)
-                : const Color(0xFF006548); // Commons default
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
-      ),
-      child: Text(
-        house,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: color,
-          letterSpacing: 0.2,
-        ),
+    final color = _houseAccentColor(house);
+    return Card(
+      child: Row(
+        children: [
+          Container(
+            width: 6,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(12),
+              ),
+            ),
+          ),
+          Expanded(child: child),
+        ],
       ),
     );
   }
+}
+
+Color _houseAccentColor(String house) {
+  final h = house.toLowerCase();
+  if (h.contains('lords') || h.contains('grand committee')) {
+    return const Color(0xFFB50938);
+  }
+  if (h.contains('westminster hall')) {
+    return const Color(0xFF006548);
+  }
+  if (h.contains('committee')) {
+    return const Color(0xFF1A5276);
+  }
+  return const Color(0xFF006548); // Commons default
 }
 
 class _DebateFeedItem {
@@ -456,6 +513,8 @@ class _DebateFeedItem {
   final String house;
   final String debateId;
   final int order;
+  final String? startTimecode;
+  final String? section;
 
   const _DebateFeedItem({
     required this.title,
@@ -463,6 +522,8 @@ class _DebateFeedItem {
     this.house = '',
     this.debateId = '',
     this.order = 0,
+    this.startTimecode,
+    this.section,
   });
 
   String get durationLabel => _durationLabelFromMinutes(durationMinutes);

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../models/debate.dart';
 import '../models/member.dart';
 import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
@@ -27,19 +28,24 @@ class SpeakerEntry {
 class TranscriptViewModel extends ChangeNotifier {
   final ParliamentaryDataService _service;
   final String date;
+
   /// When set, only speeches belonging to this root debate are shown.
   final String? initialDebateId;
 
-  TranscriptViewModel(this._service, {required this.date, this.initialDebateId});
+  TranscriptViewModel(this._service,
+      {required this.date, this.initialDebateId});
 
   List<Speech> _speeches = [];
   final Map<int, Member> _memberCache = {};
   final Map<String, Member> _speechMemberCache = {};
   List<SpeakerEntry> _speakers = [];
   final List<_TimeAnchor> _timeAnchors = [];
+  int? _sittingStartSeconds;
   String? _primaryDebateTitle;
+
   /// "Commons", "Lords", "Commons & Lords", or null if unknown.
   String? _primaryHouse;
+  String? _primarySection;
   bool _isLoading = false;
   String? _error;
   bool _isDisposed = false;
@@ -49,6 +55,13 @@ class TranscriptViewModel extends ChangeNotifier {
   List<SpeakerEntry> get speakers => List.unmodifiable(_speakers);
   String? get primaryDebateTitle => _primaryDebateTitle;
   String? get primaryHouse => _primaryHouse;
+  String? get primarySection => _primarySection;
+  String? get sittingStartTimeLabel => _sittingStartSeconds != null
+      ? _formatTimeToNearestMinute(_sittingStartSeconds!)
+      : null;
+  String? get sittingStartTimecode => _sittingStartSeconds != null
+      ? _formatTimeToSecond(_sittingStartSeconds!)
+      : null;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
@@ -63,13 +76,15 @@ class TranscriptViewModel extends ChangeNotifier {
       final debates = await _service.getDebatesForDate(date);
       final rootIds = debates.map((d) => d.id).toSet();
 
+      _sittingStartSeconds = _findSittingStartSeconds(allRawSpeeches);
       final rawSpeeches = initialDebateId != null
           ? _speechesForRootDebate(allRawSpeeches, rootIds, initialDebateId!)
           : allRawSpeeches;
 
       _speeches = _normaliseSpeeches(rawSpeeches);
       _primaryDebateTitle = _computePrimaryDebateTitle(_speeches);
-      _primaryHouse = await _computePrimaryHouse();
+      _primaryHouse = _computePrimaryHouseFromDebates(debates);
+      _primarySection = _computePrimarySectionFromDebates(debates);
       await _loadMemberProfiles();
       _buildSpeakersIndex();
     } catch (e) {
@@ -107,49 +122,64 @@ class TranscriptViewModel extends ChangeNotifier {
   /// [position] is typically the top visible speech index, optionally including
   /// a fractional part within that item (e.g. `12.4`).
   String? estimatedTimeAtPosition(double position) {
-    if (_timeAnchors.isEmpty) return null;
-
-    final first = _timeAnchors.first;
-    final last = _timeAnchors.last;
-
-    if (position <= first.index) {
-      return _formatTimeToNearestMinute(first.secondsSinceMidnight);
-    }
-    if (position >= last.index) {
-      return _formatTimeToNearestMinute(last.secondsSinceMidnight);
-    }
-
-    _TimeAnchor? previous;
-    _TimeAnchor? next;
-    for (final anchor in _timeAnchors) {
-      if (anchor.index <= position) previous = anchor;
-      if (anchor.index >= position) {
-        next = anchor;
-        break;
-      }
-    }
-
-    if (previous == null && next == null) return null;
-    if (previous == null) {
-      return _formatTimeToNearestMinute(next!.secondsSinceMidnight);
-    }
-    if (next == null) {
-      return _formatTimeToNearestMinute(previous.secondsSinceMidnight);
-    }
-    if (next.index == previous.index) {
-      return _formatTimeToNearestMinute(previous.secondsSinceMidnight);
-    }
-
-    final ratio = (position - previous.index) / (next.index - previous.index);
-    final interpolatedSeconds = previous.secondsSinceMidnight +
-        ((next.secondsSinceMidnight - previous.secondsSinceMidnight) * ratio)
-            .round();
-    return _formatTimeToNearestMinute(interpolatedSeconds);
+    final seconds = _estimatedSecondsAtPosition(position);
+    if (seconds == null) return null;
+    return _formatTimeToNearestMinute(seconds);
   }
 
   /// Returns an interpolated `HH:MM:SS` estimate for a specific speech index.
   String? estimatedTimeForSpeechIndex(int index) {
     return estimatedTimeAtPosition(index.toDouble());
+  }
+
+  /// Best available Hansard timecode (`HH:MM:SS`) for deep-linking the
+  /// currently loaded transcript to parliamentlive.tv.
+  ///
+  /// Prefers explicit `Speech.timecode` values from Hansard rows, then falls
+  /// back to timestamp-derived anchors when explicit per-speech timecodes are
+  /// absent.
+  String? get parliamentLiveStartTimecode {
+    for (final speech in _speeches) {
+      final raw = speech.timecode;
+      if (raw == null || raw.trim().isEmpty) continue;
+      final seconds = _parseTimeToSeconds(raw);
+      if (seconds != null) {
+        return _formatTimeToSecond(seconds);
+      }
+    }
+
+    final anchoredSeconds = _estimatedSecondsAtPosition(0);
+    if (anchoredSeconds == null) return null;
+    return _formatTimeToSecond(anchoredSeconds);
+  }
+
+  /// Debate-specific Hansard timecode (`HH:MM:SS`) for parliamentlive deep-linking.
+  ///
+  /// When [debateTitle] is provided, this scopes lookup to that debate's first
+  /// matching speech in the loaded transcript so chamber-wide videos shared by
+  /// multiple debates start at the right point.
+  String? parliamentLiveStartTimecodeForDebateTitle(String? debateTitle) {
+    final target = debateTitle?.trim();
+    if (target == null || target.isEmpty) return parliamentLiveStartTimecode;
+
+    int? firstMatchIndex;
+    for (int i = 0; i < _speeches.length; i++) {
+      final speech = _speeches[i];
+      if (speech.debateTitle.trim() != target) continue;
+      firstMatchIndex ??= i;
+      final raw = speech.timecode;
+      if (raw == null || raw.trim().isEmpty) continue;
+      final seconds = _parseTimeToSeconds(raw);
+      if (seconds != null) {
+        return _formatTimeToSecond(seconds);
+      }
+    }
+
+    if (firstMatchIndex == null) return parliamentLiveStartTimecode;
+    final anchoredSeconds =
+        _estimatedSecondsAtPosition(firstMatchIndex.toDouble());
+    if (anchoredSeconds == null) return null;
+    return _formatTimeToSecond(anchoredSeconds);
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -217,8 +247,8 @@ class TranscriptViewModel extends ChangeNotifier {
     for (final speech in _speeches) {
       final chairName = speech.inChairName;
       if (chairName == null) continue;
-      final match = lookup.matchExact([chairName]) ??
-          lookup.matchFuzzy([chairName]);
+      final match =
+          lookup.matchExact([chairName]) ?? lookup.matchFuzzy([chairName]);
       if (match != null) {
         _speechMemberCache[speech.id] = match;
         _memberCache[match.id] = match;
@@ -228,8 +258,8 @@ class TranscriptViewModel extends ChangeNotifier {
     final cachedAliases = await _service.getSpeakerAliasMemberIds(aliasKeys);
 
     for (final speech in _speeches) {
-      final hasDirectMatch = speech.memberId != null &&
-          _memberCache.containsKey(speech.memberId!);
+      final hasDirectMatch =
+          speech.memberId != null && _memberCache.containsKey(speech.memberId!);
       if (hasDirectMatch || !speech.hasNamedSpeaker) continue;
 
       final partyHint = _partyHintForSpeech(speech);
@@ -319,6 +349,22 @@ class TranscriptViewModel extends ChangeNotifier {
           continue;
         }
         lastProceduralNormalized = normalized;
+
+        // "The House met at 9.30 am" — harvest the start time as a free
+        // anchor for timestamp interpolation, then drop the speech.
+        if (speech.isSittingStartAnnouncement) {
+          final seconds = speech.sittingStartSeconds;
+          if (seconds != null) {
+            _timeAnchors.add(
+              _TimeAnchor(
+                index: displayIndex.toDouble(),
+                secondsSinceMidnight: seconds,
+              ),
+            );
+          }
+          i++;
+          continue;
+        }
 
         final mergedCommittee = _mergeCommitteeMembershipLines(
           raw: raw,
@@ -464,36 +510,72 @@ class TranscriptViewModel extends ChangeNotifier {
     return result;
   }
 
-  Future<String?> _computePrimaryHouse() async {
-    try {
-      final debates = await _service.getDebatesForDate(date);
-      if (debates.isEmpty) return null;
-      final houseByDebateId = {for (final d in debates) d.id: d.house};
+  String? _computePrimaryHouseFromDebates(List<Debate> debates) {
+    if (debates.isEmpty) return null;
+    final houseByDebateId = {for (final d in debates) d.id: d.house};
 
-      // Count speeches per house to find the dominant one.
-      final houseCounts = <String, int>{};
-      for (final speech in _speeches) {
-        final house = houseByDebateId[speech.debateId];
-        if (house != null && house.isNotEmpty) {
-          houseCounts[house] = (houseCounts[house] ?? 0) + 1;
-        }
+    // Count speeches per house to find the dominant one.
+    final houseCounts = <String, int>{};
+    for (final speech in _speeches) {
+      final house = houseByDebateId[speech.debateId];
+      if (house != null && house.isNotEmpty) {
+        houseCounts[house] = (houseCounts[house] ?? 0) + 1;
       }
-
-      if (houseCounts.isEmpty) {
-        // Fall back to distinct house values from debates.
-        final houses = debates.map((d) => d.house).toSet();
-        return houses.length == 1 ? houses.first : null;
-      }
-      if (houseCounts.length == 1) return houseCounts.keys.first;
-
-      final total = houseCounts.values.fold(0, (a, b) => a + b);
-      for (final entry in houseCounts.entries) {
-        if (entry.value / total > 0.7) return entry.key;
-      }
-      return 'Commons & Lords';
-    } catch (_) {
-      return null;
     }
+
+    if (houseCounts.isEmpty) {
+      // Fall back to distinct house values from debates.
+      final houses = debates.map((d) => d.house).toSet();
+      return houses.length == 1 ? houses.first : null;
+    }
+    if (houseCounts.length == 1) return houseCounts.keys.first;
+
+    final total = houseCounts.values.fold(0, (a, b) => a + b);
+    for (final entry in houseCounts.entries) {
+      if (entry.value / total > 0.7) return entry.key;
+    }
+    return 'Commons & Lords';
+  }
+
+  String? _computePrimarySectionFromDebates(List<Debate> debates) {
+    if (debates.isEmpty) return null;
+    final sectionByDebateId = {for (final d in debates) d.id: d.section};
+
+    if (initialDebateId != null) {
+      final direct = sectionByDebateId[initialDebateId!];
+      return (direct == null || direct.trim().isEmpty) ? null : direct;
+    }
+
+    final rootIds = debates.map((d) => d.id).toSet();
+    final sectionCounts = <String, int>{};
+    String? currentRoot;
+
+    for (final speech in _speeches) {
+      if (rootIds.contains(speech.debateId)) {
+        currentRoot = speech.debateId;
+      }
+      final section = sectionByDebateId[currentRoot ?? speech.debateId];
+      if (section != null && section.trim().isNotEmpty) {
+        sectionCounts[section] = (sectionCounts[section] ?? 0) + 1;
+      }
+    }
+
+    if (sectionCounts.isEmpty) {
+      final sections = debates
+          .map((d) => d.section)
+          .whereType<String>()
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toSet();
+      return sections.length == 1 ? sections.first : null;
+    }
+
+    if (sectionCounts.length == 1) return sectionCounts.keys.first;
+    final total = sectionCounts.values.fold(0, (a, b) => a + b);
+    for (final entry in sectionCounts.entries) {
+      if (entry.value / total > 0.7) return entry.key;
+    }
+    return null;
   }
 
   Set<String> _redundantDatePhrases() {
@@ -690,11 +772,63 @@ class TranscriptViewModel extends ChangeNotifier {
     return (h * 3600) + (m * 60) + s;
   }
 
+  int? _estimatedSecondsAtPosition(double position) {
+    if (_timeAnchors.isEmpty) return null;
+
+    final first = _timeAnchors.first;
+    final last = _timeAnchors.last;
+
+    if (position <= first.index) {
+      return first.secondsSinceMidnight;
+    }
+
+    if (position >= last.index) {
+      return last.secondsSinceMidnight;
+    }
+
+    _TimeAnchor? previous;
+    _TimeAnchor? next;
+    for (final anchor in _timeAnchors) {
+      if (anchor.index <= position) previous = anchor;
+      if (anchor.index >= position) {
+        next = anchor;
+        break;
+      }
+    }
+
+    if (previous == null && next == null) return null;
+    if (previous == null) return next!.secondsSinceMidnight;
+    if (next == null) return previous.secondsSinceMidnight;
+    if (next.index == previous.index) return previous.secondsSinceMidnight;
+
+    final ratio = (position - previous.index) / (next.index - previous.index);
+    return previous.secondsSinceMidnight +
+        ((next.secondsSinceMidnight - previous.secondsSinceMidnight) * ratio)
+            .round();
+  }
+
+  int? _findSittingStartSeconds(List<Speech> speeches) {
+    for (final speech in speeches) {
+      if (!speech.isSittingStartAnnouncement) continue;
+      final seconds = speech.sittingStartSeconds;
+      if (seconds != null) return seconds;
+    }
+    return null;
+  }
+
   String _formatTimeToNearestMinute(int secondsSinceMidnight) {
     final roundedMinutes = ((secondsSinceMidnight + 30) ~/ 60) % (24 * 60);
     final h = (roundedMinutes ~/ 60).toString().padLeft(2, '0');
     final m = (roundedMinutes % 60).toString().padLeft(2, '0');
     return '$h:$m';
+  }
+
+  String _formatTimeToSecond(int secondsSinceMidnight) {
+    final normalized = secondsSinceMidnight % (24 * 60 * 60);
+    final h = (normalized ~/ 3600).toString().padLeft(2, '0');
+    final m = ((normalized % 3600) ~/ 60).toString().padLeft(2, '0');
+    final s = (normalized % 60).toString().padLeft(2, '0');
+    return '$h:$m:$s';
   }
 
   @override
@@ -825,9 +959,26 @@ class _MemberCandidate {
   }
 
   static const _honorifics = {
-    'rt', 'hon', 'right', 'sir', 'dame', 'dr', 'mr', 'mrs', 'ms', 'prof',
-    'lord', 'lady', 'baron', 'baroness', 'viscount', 'viscountess',
-    'earl', 'countess', 'duke', 'duchess',
+    'rt',
+    'hon',
+    'right',
+    'sir',
+    'dame',
+    'dr',
+    'mr',
+    'mrs',
+    'ms',
+    'prof',
+    'lord',
+    'lady',
+    'baron',
+    'baroness',
+    'viscount',
+    'viscountess',
+    'earl',
+    'countess',
+    'duke',
+    'duchess',
   };
 
   static String normalizeName(String raw) {

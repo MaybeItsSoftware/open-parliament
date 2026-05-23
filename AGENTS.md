@@ -11,6 +11,7 @@ Public APIs consumed:
 - **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait.
 - **Hansard API** — debate sections + speeches per sitting day.
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
+- **parliamentlive.tv** — no documented JSON; we scrape `https://parliamentlive.tv/Search?Start=DD/MM/YYYY&End=DD/MM/YYYY` for `(guid, title)` pairs of broadcast events. Direct deep-links use `https://parliamentlive.tv/event/index/{guid}` (optional `?in=HH:MM:SS`).
 
 ## Quick commands
 
@@ -137,6 +138,7 @@ The Hansard XML-derived JSON has a number of edge cases that the speech pipeline
 - **Procedural rows** without a named speaker (`memberId == null`, `attributedTo == ''`).
 - **Timestamps** — rows where `ItemType == "Timestamp"` *or* the value is bare clock-time text. These are stripped from the display list and used to anchor interpolated times shown next to speeches.
 - **Date headings** (`hrsTag == "hs_date"`) — usually duplicate the page title; suppressed from the display.
+- **Sitting-start announcements** — *"The House met at 9.30 am"* and variants. Detected by `Speech.isSittingStartAnnouncement`; the clock time (when given numerically) is parsed by `sittingStartSeconds` and added as a free time anchor, then the speech is dropped. Debates whose only content is one of these announcements are also filtered out of the date-selector feed.
 - **Committee membership blocks** — multi-row "The Committee consisted of the following Members:" preambles are merged into one synthetic procedural speech. `SpeechBlock` then renders that as a structured roster card. The merger is in `_mergeCommitteeMembershipLines`; the renderer is in `speech_block.dart` (`_CommitteeRoster`).
 - **Division (vote) results** — encoded as a pipe-delimited string `index|time|ayes|noes|description|result||ayes_list|noes_list`. Detected by regex on the leading `index|HH:MM`.
 - **Stage directions** — short text ending with an em-dash (`rose—`, `resumed—`) attributed to a member. Rendered as italic action rows, not full speech bubbles.
@@ -176,6 +178,23 @@ Party colours live in `lib/utils/party_colors.dart`. Always use `partyColor(...)
 - **Don't introduce new top-level files** (READMEs, scratch docs) unless asked. Update `AGENTS.md` if you change architecture.
 - **UI verification:** unit tests don't catch visual regressions. If you change `SpeechBlock` or any view, say so explicitly in the change description and, where reasonable, run `flutter run -d chrome` to eyeball it.
 - **Commits:** small, focused, present-tense subject (e.g. *"Render committee roster as a structured card"*). Match the existing commit log style.
+
+## parliamentlive.tv integration
+
+There is **no documented JSON endpoint** that maps a Hansard sitting day to its parliamentlive.tv broadcast GUIDs. The `data.parliamentlive.tv/api/event/feed` Atom feed exists but ignores date filters and just returns the most-recent ~25 events. The only stable source is the search page itself:
+
+```
+GET https://parliamentlive.tv/Search?Start=DD/MM/YYYY&End=DD/MM/YYYY
+```
+
+Each result is rendered server-side as `<a href=".../Event/Index/{guid}"><img alt="{title}">`. `ParliamentLiveApiService.parseSearchHtml` extracts those pairs; `bestParliamentLiveMatch` (in `lib/utils/parliament_live.dart`) resolves a Hansard `Debate.title` against the event list with a normalise-then-contains heuristic that handles common variations (sitting-number suffixes, the `BSL - ` prefix, punctuation).
+
+If you change the matcher, keep these requirements in mind:
+- A Hansard committee debate often has a sitting suffix (`"Courts and Tribunals Bill (Ninth sitting)"`) while the broadcast title is bare (`"Courts and Tribunals Bill"`). The Hansard-contains-broadcast direction must match.
+- A given title can appear twice on the same day (morning + afternoon committee). The current code returns the first match — disambiguating by start time is a planned Phase 2 (the `_TimeAnchor` we already harvest from "The House met at …" gives us the data to do it).
+- Chamber proceedings ("Cabinet Office", "Oral Answers to Questions") have no dedicated broadcast — they're moments inside the bigger "House of Commons" video. The matcher returns null for these and the caller falls back to the day-search URL.
+
+Deep-linking per speech via `?in=HH:MM:SS` is supported by parliamentlive.tv but not yet wired up; speech `Timecode` values are the obvious source.
 
 ## Glossary
 

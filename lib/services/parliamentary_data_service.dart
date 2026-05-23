@@ -2,7 +2,9 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
+import '../utils/parliament_live.dart' as live_match;
 import 'api_services.dart';
 import 'database_service.dart';
 
@@ -21,14 +23,36 @@ class ParliamentaryDataService {
   final DatabaseService _db;
   final MembersApiService _membersApi;
   final HansardApiService _hansardApi;
+  final ParliamentLiveApiService _liveApi;
 
   ParliamentaryDataService({
     DatabaseService? databaseService,
     MembersApiService? membersApiService,
     HansardApiService? hansardApiService,
+    ParliamentLiveApiService? parliamentLiveApiService,
   })  : _db = databaseService ?? DatabaseService(),
         _membersApi = membersApiService ?? MembersApiService(),
-        _hansardApi = hansardApiService ?? HansardApiService();
+        _hansardApi = hansardApiService ?? HansardApiService(),
+        _liveApi = parliamentLiveApiService ?? ParliamentLiveApiService();
+
+  /// Best-effort lookup of a parliamentlive.tv event for a Hansard debate.
+  /// Falls back to a chamber-level stream when no direct title match exists.
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async {
+    final events = await _liveApi.fetchEventsForDate(date);
+    final title = debateTitle.trim();
+    if (title.isNotEmpty) {
+      final direct = live_match.bestParliamentLiveMatch(title, events);
+      if (direct != null) return direct;
+    }
+    return live_match.fallbackParliamentLiveMatchForHouse(
+      events: events,
+      house: house,
+    );
+  }
 
   // ─── Members ──────────────────────────────────────────────────────────────
 
@@ -288,5 +312,6 @@ class ParliamentaryDataService {
   void dispose() {
     _membersApi.dispose();
     _hansardApi.dispose();
+    _liveApi.dispose();
   }
 }

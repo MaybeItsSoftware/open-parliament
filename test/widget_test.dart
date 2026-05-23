@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
+import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:open_hansard/services/theme_service.dart';
@@ -57,6 +58,14 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<int> wipeDebateCache() async => 0;
+
+  @override
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async =>
+      null;
 
   @override
   void dispose() {}

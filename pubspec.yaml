@@ -37,6 +37,14 @@ dependencies:
   flutter_map: ^7.0.0
   latlong2: ^0.9.0
 
+  # Open external URLs (e.g. parliamentlive.tv) in the system browser
+  url_launcher: ^6.3.0
+
+  # In-app embed of parliamentlive.tv on platforms that support it
+  webview_flutter: ^4.10.0
+  webview_flutter_android: ^4.11.0
+  webview_flutter_wkwebview: ^3.24.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

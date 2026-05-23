@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
+import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
@@ -77,6 +78,14 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<int> wipeDebateCache() async => 0;
+
+  @override
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async =>
+      null;
 
   @override
   void dispose() {}
@@ -430,6 +439,92 @@ void main() {
       expect(vm.estimatedTimeAtPosition(2), '10:10');
     });
 
+    test('parliamentLiveStartTimecode prefers explicit speech timecode',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          timecode: '10:03:04',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's2',
+          memberName: 'Bob',
+          memberId: 2,
+          timecode: '10:05:00',
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, '10:03:04');
+    });
+
+    test('parliamentLiveStartTimecode falls back to timestamp anchors',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 't1',
+          memberName: '',
+          itemType: 'Timestamp',
+          speechText: '10:00:00',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, '10:00:00');
+    });
+
+    test('parliamentLiveStartTimecode returns null when no time is available',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          orderIndex: 0,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, isNull);
+    });
+
+    test('parliamentLiveStartTimecodeForDebateTitle scopes by debate title',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          debateTitle: 'Debate A',
+          timecode: '09:00:00',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's2',
+          memberName: 'Bob',
+          memberId: 2,
+          debateTitle: 'Debate B',
+          timecode: '10:15:00',
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(
+          vm.parliamentLiveStartTimecodeForDebateTitle('Debate B'), '10:15:00');
+    });
+
     test('primaryDebateTitle is fixed from loaded transcript', () async {
       fakeService.speechesResult = [
         makeSpeech(
@@ -505,6 +600,28 @@ void main() {
         vm.speeches.first.speechText,
         contains('• Argar, Edward (Melton and Syston) (Con)'),
       );
+    });
+
+    test('loadSpeeches drops "House met at" speech and seeds a time anchor',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 'p-met',
+          memberName: '',
+          speechText: 'The House met at 9.30 am.',
+          orderIndex: 0,
+        ),
+        makeSpeech(id: 's1', memberName: 'Alice', memberId: 1, orderIndex: 1),
+        makeSpeech(id: 's2', memberName: 'Bob', memberId: 2, orderIndex: 2),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.speeches.map((s) => s.id), ['s1', 's2']);
+      // Without timestamp rows the only anchor available comes from the
+      // sitting-start announcement — interpolation should return that time.
+      expect(vm.estimatedTimeAtPosition(0), '09:30');
+      expect(vm.sittingStartTimeLabel, '09:30');
+      expect(vm.sittingStartTimecode, '09:30:00');
     });
 
     test('loadSpeeches does not stall on empty procedural rows', () async {
