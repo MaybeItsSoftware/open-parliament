@@ -75,7 +75,8 @@ lib/
 │   ├── api_services.dart     # Low-level HTTP: MembersApiService, HansardApiService
 │   ├── database_service.dart # Opens / migrates SQLite databases
 │   ├── parliamentary_data_service.dart  # Public facade. Use this from view-models.
-│   └── theme_service.dart    # Persisted dark-mode toggle (shared_preferences)
+│   ├── theme_service.dart    # Persisted dark-mode toggle (shared_preferences)
+│   └── saved_speeches_service.dart  # App-wide bookmarked speeches (shared_preferences)
 ├── viewmodels/               # ChangeNotifier — one per primary screen
 │   ├── date_selector_viewmodel.dart
 │   ├── transcript_viewmodel.dart  # Speech normalisation + speaker resolution
@@ -117,7 +118,8 @@ test/
 - **Imports:** prefer **package-relative** (`../services/foo.dart`) within `lib/`. `avoid_relative_lib_imports` is enabled — i.e. don't `import 'package:open_hansard/...'` from inside `lib/`.
 - **Comments:** match the existing style — short `///` doc comments on public types and non-obvious methods. Don't add comments that just restate the code. If the *why* isn't obvious from the name, write one line explaining the *why*.
 - **Async UI:** never use a `BuildContext` after an `await` without checking `mounted` (the lint enforces this).
-- **Provider:** state belongs on a `ChangeNotifier` view-model, exposed once at the top of a screen via `ChangeNotifierProvider.value(value: _vm)`. Don't push view-models above the route boundary unless the state is genuinely app-wide (`ThemeService` is, individual transcripts are not).
+- **Provider:** state belongs on a `ChangeNotifier` view-model, exposed once at the top of a screen via `ChangeNotifierProvider.value(value: _vm)`. Don't push view-models above the route boundary unless the state is genuinely app-wide (`ThemeService` and `SavedSpeechesService` are, individual transcripts are not).
+- **Long-press actions:** press-and-hold on a transcript speech opens `showSpeechActionsSheet` (`lib/widgets/speech_actions_sheet.dart`) to save (bookmark), copy, or share it. Sharing uses the native OS share sheet via `share_plus`; saved speeches are reviewable from Settings → Saved (`lib/views/saved_speeches_view.dart`).
 - **No new dependencies without good reason.** Existing deps are listed in `pubspec.yaml`; prefer composing them.
 
 ## Testing

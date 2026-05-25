@@ -36,9 +36,13 @@ dependencies:
   # Constituency map on member profile page
   flutter_map: ^7.0.0
   latlong2: ^0.9.0
+  flutter_map_tile_caching: ^10.0.0
 
   # Open external URLs (e.g. parliamentlive.tv) in the system browser
   url_launcher: ^6.3.0
+
+  # Native OS share sheet for sharing a speech (WhatsApp, Messages, Mail, …)
+  share_plus: ^10.0.0
 
   # In-app embed of parliamentlive.tv on platforms that support it
   webview_flutter: ^4.10.0

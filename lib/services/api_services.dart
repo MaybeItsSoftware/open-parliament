@@ -134,6 +134,42 @@ class MembersApiService {
     }
   }
 
+  /// Fetches one page of a member's recorded division (vote) history for
+  /// [house] (1 = Commons, 2 = Lords), newest first. Pages are 1-indexed and
+  /// the API returns 20 votes per page.
+  ///
+  /// Returns the unwrapped `value` object of each result, or an empty list on
+  /// network failure or when no votes are found.
+  Future<List<Map<String, dynamic>>> fetchMemberVoting(
+    int id, {
+    int house = 1,
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/$id/Voting').replace(
+      queryParameters: {
+        'house': house.toString(),
+        'page': page.toString(),
+      },
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = (body['items'] as List<dynamic>?) ?? const [];
+      return items
+          .whereType<Map<String, dynamic>>()
+          .map((item) =>
+              (item['value'] as Map<String, dynamic>?) ?? const <String, dynamic>{})
+          .where((value) => value.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   void dispose() => _client.close();
 }
 
@@ -584,6 +620,128 @@ class ParliamentLiveApiService {
   void dispose() => _client.close();
 }
 
+/// Low-level client for the official UK Parliament Bills API.
+///
+/// Endpoint: https://bills-api.parliament.uk/api/v1/Bills
+/// Used to resolve a bill title (parsed from a debate title) to a canonical
+/// bill id so the app can deep-link to `https://bills.parliament.uk/bills/{id}`.
+class BillsApiService {
+  static const String _baseUrl = 'https://bills-api.parliament.uk/api/v1/Bills';
+
+  final http.Client _client;
+  final Map<String, int?> _cache = {};
+
+  BillsApiService({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Returns the id of the best matching bill for [title], or `null` if none is
+  /// found. Prefers an exact (case-insensitive) `shortTitle` match, otherwise
+  /// falls back to the first (most relevant) result. Cached per title.
+  Future<int?> findBillId(String title) async {
+    final query = title.trim();
+    if (query.isEmpty) return null;
+    if (_cache.containsKey(query)) return _cache[query];
+
+    final uri = Uri.parse(_baseUrl).replace(
+      queryParameters: <String, String>{'SearchTerm': query, 'Take': '20'},
+    );
+
+    try {
+      final response = await _client.get(uri);
+      if (response.statusCode != 200) return _cache[query] = null;
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List || items.isEmpty) return _cache[query] = null;
+
+      final normalizedQuery = query.toLowerCase();
+      int? fallbackId;
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) continue;
+        final id = item['billId'];
+        if (id is! int) continue;
+        fallbackId ??= id;
+        final shortTitle = (item['shortTitle'] as String?)?.toLowerCase();
+        if (shortTitle == normalizedQuery) return _cache[query] = id;
+      }
+      return _cache[query] = fallbackId;
+    } catch (_) {
+      return _cache[query] = null;
+    }
+  }
+
+  /// Fetches the most recently updated bills, newest first. Empty on failure.
+  Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) async {
+    final uri = Uri.parse(_baseUrl).replace(
+      queryParameters: <String, String>{
+        'SortOrder': 'DateUpdatedDescending',
+        'Skip': skip.toString(),
+        'Take': take.toString(),
+      },
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List) return const [];
+      return items.whereType<Map<String, dynamic>>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Fetches full detail for the bill identified by [id], or `null` on failure.
+  Future<Map<String, dynamic>?> fetchBillDetail(int id) async {
+    final uri = Uri.parse('$_baseUrl/$id');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body);
+      return body is Map<String, dynamic> ? body : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetches a bill's stage history (1st reading, 2nd reading, …) in the order
+  /// the API returns them (chronological). Empty on failure.
+  Future<List<Map<String, dynamic>>> fetchBillStages(
+    int id, {
+    int take = 30,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/$id/Stages').replace(
+      queryParameters: <String, String>{'Take': take.toString()},
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List) return const [];
+      return items.whereType<Map<String, dynamic>>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Fetches recent news articles / updates for a bill, newest first. Empty on
+  /// failure.
+  Future<List<Map<String, dynamic>>> fetchBillNews(int id, {int take = 20}) async { final uri = Uri.parse("$_baseUrl/$id/NewsArticles").replace(queryParameters: <String, String>{"Take": take.toString()}); try { final response = await _client.get(uri, headers: {"Accept": "application/json"}); if (response.statusCode != 200) return const []; final body = json.decode(response.body); final items = (body is Map<String, dynamic>) ? body["items"] : null; if (items is! List) return const []; return items.whereType<Map<String, dynamic>>().toList(); } catch (_) { return const []; } }
+
+  /// Fetches upcoming bill sittings from `DateFrom` (defaults to today).
+  Future<List<Map<String, dynamic>>> fetchComingUpSittings({String? dateFrom, int skip = 0, int take = 50}) async { final start = dateFrom ?? DateTime.now().toIso8601String().split("T")[0]; final uri = Uri.parse("https://bills-api.parliament.uk/api/v1/Sittings").replace(queryParameters: <String, String>{"DateFrom": start, "Take": take.toString()}); try { final response = await _client.get(uri, headers: {"Accept": "application/json"}); if (response.statusCode != 200) return const []; final body = json.decode(response.body); final items = (body is Map<String, dynamic>) ? body["items"] : null; if (items is! List) return const []; return items.whereType<Map<String, dynamic>>().toList(); } catch (_) { return const []; } }
+
+  void dispose() => _client.close();
+}
+
 /// Exception thrown when a Hansard API request fails.
 class HansardApiException implements Exception {
   final String message;
@@ -591,4 +749,135 @@ class HansardApiException implements Exception {
 
   @override
   String toString() => 'HansardApiException: $message';
+}
+
+/// Exception thrown when a boundary API request fails.
+class BoundaryApiException implements Exception {
+  final String message;
+  const BoundaryApiException(this.message);
+
+  @override
+  String toString() => 'BoundaryApiException: $message';
+}
+
+/// Low-level HTTP client for UK boundary GeoJSON from ONS ArcGIS services.
+class BoundaryApiService {
+  static const String _constituencyServiceUrl =
+      'https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/'
+      'Westminster_Parliamentary_Constituencies_July_2024_Boundaries_UK_BFE/'
+      'FeatureServer';
+  static const String _councilServiceUrl =
+      'https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/'
+      'Local_Authority_Districts_December_2024_Boundaries_UK_BFC/FeatureServer';
+
+  final http.Client _client;
+
+  BoundaryApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  Future<Map<String, dynamic>> fetchConstituencyBoundaries() =>
+      _fetchBoundaries(_constituencyServiceUrl);
+
+  Future<Map<String, dynamic>> fetchCouncilBoundaries() =>
+      _fetchBoundaries(_councilServiceUrl);
+
+  Future<Map<String, dynamic>> _fetchBoundaries(String serviceUrl) async {
+    final layerUrl = '$serviceUrl/0';
+    final pageSize = await _fetchMaxRecordCount(layerUrl);
+    final total = await _fetchCount(layerUrl);
+    final allFeatures = <Map<String, dynamic>>[];
+    int offset = 0;
+    while (offset < total) {
+      final page = await _fetchPage(
+        layerUrl,
+        offset: offset,
+        pageSize: pageSize,
+      );
+      allFeatures.addAll(page);
+      offset += page.length;
+      if (page.isEmpty) break;
+    }
+    return {
+      'type': 'FeatureCollection',
+      'features': allFeatures,
+    };
+  }
+
+  Future<int> _fetchMaxRecordCount(String layerUrl) async {
+    final uri = Uri.parse('$layerUrl?f=pjson');
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw BoundaryApiException(
+        'Boundary layer metadata failed (${response.statusCode}).',
+      );
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return (body['maxRecordCount'] as num?)?.toInt() ?? 2000;
+  }
+
+  Future<int> _fetchCount(String layerUrl) async {
+    final uri = Uri.parse('$layerUrl/query').replace(
+      queryParameters: const {
+        'where': '1=1',
+        'returnCountOnly': 'true',
+        'f': 'json',
+      },
+    );
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw BoundaryApiException(
+        'Boundary count query failed (${response.statusCode}).',
+      );
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final count = body['count'];
+    if (count is! num) {
+      throw const FormatException('Boundary count response is invalid.');
+    }
+    return count.toInt();
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchPage(
+    String layerUrl, {
+    required int offset,
+    required int pageSize,
+  }) async {
+    final uri = Uri.parse('$layerUrl/query').replace(
+      queryParameters: {
+        'where': '1=1',
+        'outFields': 'OBJECTID',
+        'returnGeometry': 'true',
+        'orderByFields': 'OBJECTID',
+        'f': 'geojson',
+        'outSR': '4326',
+        'resultOffset': offset.toString(),
+        'resultRecordCount': pageSize.toString(),
+        'geometryPrecision': '5',
+        'maxAllowableOffset': '0.01',
+      },
+    );
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw BoundaryApiException(
+        'Boundary query failed (${response.statusCode}).',
+      );
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final features = body['features'];
+    if (features is! List) {
+      throw const FormatException('Boundary query returned invalid features.');
+    }
+    return features.whereType<Map<String, dynamic>>().toList();
+  }
+
+  void dispose() => _client.close();
 }

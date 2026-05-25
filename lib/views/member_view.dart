@@ -7,6 +7,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../models/member.dart';
+import '../services/parliamentary_data_service.dart';
+import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/member_viewmodel.dart';
 import 'transcript_view.dart';
@@ -29,13 +31,22 @@ class _MemberViewState extends State<MemberView> {
   final ScrollController _scrollController = ScrollController();
   bool _titleVisible = false;
 
+  // Bill groups the user has collapsed in the voting record.
+  final Set<String> _collapsedVoteGroups = {};
+
   // The app bar title fades in once the flexible space has mostly collapsed.
   static const double _collapseThreshold = 160;
+
+  // Distance from the bottom at which the next page of votes is requested.
+  static const double _loadMoreThreshold = 600;
 
   @override
   void initState() {
     super.initState();
-    _vm = MemberViewModel(member: widget.member);
+    _vm = MemberViewModel(
+      context.read<ParliamentaryDataService>(),
+      member: widget.member,
+    );
     unawaited(_vm.load());
     _scrollController.addListener(_onScroll);
   }
@@ -44,6 +55,11 @@ class _MemberViewState extends State<MemberView> {
     final collapsed = _scrollController.offset > _collapseThreshold;
     if (collapsed != _titleVisible) {
       setState(() => _titleVisible = collapsed);
+    }
+
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - _loadMoreThreshold) {
+      unawaited(_vm.loadMoreVotes());
     }
   }
 
@@ -112,9 +128,29 @@ class _MemberViewState extends State<MemberView> {
                       ),
                     ),
                   ],
+                  if (vm.votes.isNotEmpty) ...[
+                    SliverToBoxAdapter(
+                      child: _sectionHeader(context, 'Voting Record'),
+                    ),
+                    _buildVotingList(context, vm, pColor),
+                    if (vm.isLoadingMoreVotes)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                   if (vm.contributions.isEmpty &&
                       vm.governmentPosts.isEmpty &&
-                      vm.oppositionPosts.isEmpty)
+                      vm.oppositionPosts.isEmpty &&
+                      vm.votes.isEmpty)
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.all(32),
@@ -365,11 +401,7 @@ class _MemberViewState extends State<MemberView> {
               ),
             ),
             children: [
-              TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'open_hansard',
-              ),
+              buildCartoLightTileLayer(),
               MarkerLayer(
                 markers: [
                   Marker(
@@ -543,6 +575,165 @@ class _MemberViewState extends State<MemberView> {
     );
   }
 
+  // ─── Voting record ────────────────────────────────────────────────────────
+
+  /// Flattens the grouped voting record into a single sliver of header and
+  /// vote rows, honouring which bill groups the user has collapsed.
+  Widget _buildVotingList(
+    BuildContext context,
+    MemberViewModel vm,
+    Color pColor,
+  ) {
+    final rows = <_VoteRow>[];
+    for (final group in vm.voteGroups) {
+      rows.add(_VoteHeaderRow(group));
+      if (_collapsedVoteGroups.contains(group.title)) continue;
+      for (var i = 0; i < group.votes.length; i++) {
+        rows.add(
+          _VoteEntryRow(group.votes[i], isLast: i == group.votes.length - 1),
+        );
+      }
+    }
+
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, i) {
+          final row = rows[i];
+          return switch (row) {
+            _VoteHeaderRow(:final group) =>
+              _buildVoteGroupHeader(context, group),
+            _VoteEntryRow(:final vote, :final isLast) =>
+              _buildVoteRow(context, vote, showDivider: !isLast),
+          };
+        },
+        childCount: rows.length,
+      ),
+    );
+  }
+
+  Widget _buildVoteGroupHeader(BuildContext context, VoteGroup group) {
+    final theme = Theme.of(context);
+    final collapsed = _collapsedVoteGroups.contains(group.title);
+    final count = group.votes.length;
+
+    return InkWell(
+      onTap: () => setState(() {
+        // Toggle: remove returns false if it wasn't present, so add it.
+        if (!_collapsedVoteGroups.remove(group.title)) {
+          _collapsedVoteGroups.add(group.title);
+        }
+      }),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 16, 8),
+        child: Row(
+          children: [
+            Icon(
+              collapsed ? Icons.chevron_right : Icons.expand_more,
+              size: 22,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                group.title,
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$count division${count == 1 ? '' : 's'}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoteRow(
+    BuildContext context,
+    MemberVote vote, {
+    required bool showDivider,
+  }) {
+    final theme = Theme.of(context);
+    // Aye = green, No = red; tellers supervise a lobby rather than casting a
+    // counted vote, and "absent" covers divisions the member did not attend.
+    final (label, color) = switch (vote.position) {
+      VotePosition.aye => ('Aye', const Color(0xFF006548)),
+      VotePosition.no => ('No', const Color(0xFFB50938)),
+      VotePosition.teller => ('Teller', theme.colorScheme.onSurfaceVariant),
+      VotePosition.absent => ('Absent', theme.colorScheme.onSurfaceVariant),
+    };
+
+    // The bill name lives in the group header; show only the per-division part
+    // (after the colon) inside the group, falling back to the date alone.
+    final colon = vote.title.indexOf(':');
+    final detail =
+        colon >= 0 ? vote.title.substring(colon + 1).trim() : null;
+    final result = (vote.ayeCount != null && vote.noCount != null)
+        ? 'Ayes ${vote.ayeCount} · Noes ${vote.noCount}'
+        : null;
+    final meta = result != null
+        ? '${_formatDate(vote.date)} · $result'
+        : _formatDate(vote.date);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(34, 8, 16, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 56,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            margin: const EdgeInsets.only(top: 1),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (detail != null && detail.isNotEmpty) ...[
+                  Text(
+                    detail,
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w500),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                Text(
+                  meta,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (showDivider) const Divider(height: 20),
+                if (!showDivider) const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─── Error state ──────────────────────────────────────────────────────────
 
   Widget _buildError(MemberViewModel vm) {
@@ -552,7 +743,11 @@ class _MemberViewState extends State<MemberView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+            Icon(
+              Icons.error_outline,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 12),
             const Text('Could not load member details.'),
             const SizedBox(height: 12),
@@ -590,4 +785,21 @@ class _MemberViewState extends State<MemberView> {
     ];
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
+}
+
+/// A flattened row in the voting record: either a bill group header or a single
+/// division beneath it.
+sealed class _VoteRow {
+  const _VoteRow();
+}
+
+class _VoteHeaderRow extends _VoteRow {
+  final VoteGroup group;
+  const _VoteHeaderRow(this.group);
+}
+
+class _VoteEntryRow extends _VoteRow {
+  final MemberVote vote;
+  final bool isLast;
+  const _VoteEntryRow(this.vote, {required this.isLast});
 }

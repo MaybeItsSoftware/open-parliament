@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/debate.dart';
-import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
+import '../utils/house_colors.dart';
+import '../utils/party_colors.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
+import 'app_drawer.dart';
+import 'bill_view.dart';
 import 'settings_view.dart';
 import 'transcript_view.dart';
 
@@ -22,11 +25,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
 
   static final DateTime _minDate = DateTime(2000, 1, 1);
-  static const int _averageWordsPerMinute = 130;
-  static const int _maxDurationMinutes = 24 * 60;
   static const double _minDebateCardHeight = 72;
   static const double _pixelsPerMinute = 3.5;
-  static final RegExp _wordRegex = RegExp(r'\S+');
 
   @override
   void initState() {
@@ -59,6 +59,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         builder: (context, vm, _) {
           final selectedDay = vm.selectedDay ?? vm.focusedDay;
           return Scaffold(
+            drawer: const AppDrawer(current: AppDestination.debates),
             body: SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -73,11 +74,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildContextualDateSelector(
-                              context,
-                              vm,
-                              selectedDay,
-                            ),
+                            _buildTopBar(context, vm, selectedDay),
                             const SizedBox(height: 20),
                             Text(
                               'Today’s Key Debates',
@@ -106,6 +103,38 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
+  /// Inline top bar: the drawer button and the settings button flank the
+  /// date-selector box, both sitting outside its tinted background.
+  Widget _buildTopBar(
+    BuildContext context,
+    DateSelectorViewModel vm,
+    DateTime selectedDay,
+  ) {
+    return Row(
+      children: [
+        Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            tooltip: 'Menu',
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: _buildContextualDateSelector(context, vm, selectedDay),
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          tooltip: 'Settings',
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SettingsView()),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildContextualDateSelector(
     BuildContext context,
     DateSelectorViewModel vm,
@@ -118,7 +147,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -149,27 +178,20 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                 ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
                 : null,
           ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const SettingsView()),
-            ),
-          ),
         ],
       ),
     );
   }
 
   Widget _buildDebatesFeed(DateSelectorViewModel vm, DateTime day) {
-    return FutureBuilder<List<_DebateFeedItem>>(
-      future: _loadDebatesFeed(vm, day),
+    return FutureBuilder<List<DebateFeedItem>>(
+      future: vm.loadDebateFeed(day),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final items = snapshot.data ?? const <_DebateFeedItem>[];
+        final items = snapshot.data ?? const <DebateFeedItem>[];
         if (items.isEmpty) {
           return _buildNoDebatesCard(day);
         }
@@ -183,17 +205,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
               height: _debateCardHeight(item.durationMinutes),
               child: _HouseAccentCard(
                 house: item.house,
-                child: ListTile(
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                  title: Text(
-                    item.title,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      _navigateToTranscript(day, debateId: item.debateId),
-                ),
+                onTap: () =>
+                    _navigateToTranscript(day, debateId: item.debateId),
+                child: _DebateCardContent(item: item),
               ),
             );
           },
@@ -205,9 +219,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   double _debateCardHeight(int minutes) {
     final clampedMinutes = minutes <= 0 ? 1 : minutes;
     final scaled = clampedMinutes * _pixelsPerMinute;
-    return scaled < _minDebateCardHeight
-        ? _minDebateCardHeight
-        : scaled;
+    return scaled < _minDebateCardHeight ? _minDebateCardHeight : scaled;
   }
 
   Future<void> _pickDate(DateSelectorViewModel vm, DateTime selectedDay) async {
@@ -260,98 +272,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     vm.selectDay(next);
   }
 
-  Future<List<_DebateFeedItem>> _loadDebatesFeed(
-    DateSelectorViewModel vm,
-    DateTime day,
-  ) async {
-    final service = context.read<ParliamentaryDataService>();
-    final date = DateSelectorViewModel.formatDate(day);
-    try {
-      final speechesFuture = service.getSpeeches(date);
-      final debatesFuture = service.getDebatesForDate(date);
-
-      final speeches = await speechesFuture;
-      final debates = await debatesFuture;
-
-      // Build root debate lookups from the debates table.
-      final rootIds = {for (final d in debates) d.id};
-      final houseByDebateId = {for (final d in debates) d.id: d.house};
-      final titleByDebateId = {for (final d in debates) d.id: d.title};
-      final orderByDebateId = {for (final d in debates) d.id: d.orderIndex};
-      final sectionByDebateId = {for (final d in debates) d.id: d.section};
-
-      // Group speeches by root debate — sub-section speeches inherit the
-      // most recently seen root debate ID.
-      final wordCountsByDebateId = <String, int>{};
-      final firstTimecodeByDebateId = <String, String>{};
-      final hasMeaningfulSpeechByRoot = <String, bool>{};
-      String? currentRoot;
-      for (final speech in speeches) {
-        if (rootIds.contains(speech.debateId)) {
-          currentRoot = speech.debateId;
-        }
-        if (currentRoot == null) continue;
-        final timecode = _normalizedHansardTimecode(speech.timecode) ??
-            (speech.isTimestamp
-                ? _normalizedHansardTimecode(speech.speechText)
-                : null);
-        if (timecode != null) {
-          firstTimecodeByDebateId.putIfAbsent(currentRoot, () => timecode);
-        }
-        wordCountsByDebateId[currentRoot] =
-            (wordCountsByDebateId[currentRoot] ?? 0) +
-                _wordCount(speech.speechText);
-        if (_isMeaningfulSpeech(speech)) {
-          hasMeaningfulSpeechByRoot[currentRoot] = true;
-        }
-      }
-
-      // Drop debates whose only content is the "House met at …" boilerplate.
-      final placeholderRoots = <String>{
-        for (final d in debates)
-          if (_isPlaceholderDebate(d, hasMeaningfulSpeechByRoot[d.id] ?? false))
-            d.id,
-      };
-
-      if (wordCountsByDebateId.isEmpty) {
-        // No speeches yet — fall back to debate titles, still filtering out
-        // placeholders detectable from the title alone.
-        return debates
-            .where((d) => !placeholderRoots.contains(d.id))
-            .map((d) => _DebateFeedItem(
-                  debateId: d.id,
-                  title: d.title,
-                  durationMinutes: 0,
-                  house: d.house,
-                  order: d.orderIndex,
-                  section: d.section,
-                  startTimecode: firstTimecodeByDebateId[d.id],
-                ))
-            .toList();
-      }
-
-      final items = wordCountsByDebateId.entries
-          .where((entry) => !placeholderRoots.contains(entry.key))
-          .map(
-            (entry) => _DebateFeedItem(
-              debateId: entry.key,
-              title: titleByDebateId[entry.key] ?? '',
-              durationMinutes: _minutesFromWords(entry.value),
-              house: houseByDebateId[entry.key] ?? '',
-              order: orderByDebateId[entry.key] ?? 0,
-              section: sectionByDebateId[entry.key],
-              startTimecode: firstTimecodeByDebateId[entry.key],
-            ),
-          )
-          .toList()
-        ..sort((a, b) => a.order.compareTo(b.order));
-
-      return items;
-    } catch (_) {
-      return const <_DebateFeedItem>[];
-    }
-  }
-
   Widget _buildNoDebatesCard(DateTime day) {
     return Center(
       child: Card(
@@ -371,53 +291,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
-  }
-
-  static int _wordCount(String text) {
-    return _wordRegex.allMatches(text).length;
-  }
-
-  /// A debate is a placeholder when it carries no real speech content —
-  /// only the "The House met at …" announcement. Detected by the title
-  /// pattern *and* the absence of any non-boilerplate speech.
-  static bool _isPlaceholderDebate(Debate debate, bool hasMeaningfulSpeech) {
-    if (hasMeaningfulSpeech) return false;
-    final title = debate.title.toLowerCase().trim();
-    if (_placeholderTitlePattern.hasMatch(title)) return true;
-    // No speech content and no detectable title — keep, to avoid hiding
-    // real debates that simply haven't been indexed yet.
-    return false;
-  }
-
-  static bool _isMeaningfulSpeech(Speech speech) {
-    if (speech.isSittingStartAnnouncement) return false;
-    if (speech.isTimestamp) return false;
-    if (speech.isDateHeading) return false;
-    return speech.speechText.trim().isNotEmpty;
-  }
-
-  static final RegExp _placeholderTitlePattern = RegExp(
-    r'^the\s+(house|lords|committee|grand\s+committee)\b.*\bmet\s+at\b',
-  );
-
-  static int _minutesFromWords(int words) {
-    return (words / _averageWordsPerMinute)
-        .round()
-        .clamp(1, _maxDurationMinutes);
-  }
-
-  static String? _normalizedHansardTimecode(String? value) {
-    if (value == null) return null;
-    final parts = value.trim().split(':');
-    if (parts.length < 2 || parts.length > 3) return null;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    final s = parts.length == 3 ? int.tryParse(parts[2]) : 0;
-    if (h == null || m == null || s == null) return null;
-    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
-    return '${h.toString().padLeft(2, '0')}:'
-        '${m.toString().padLeft(2, '0')}:'
-        '${s.toString().padLeft(2, '0')}';
   }
 
   void _navigateToTranscript(DateTime day, {String debateId = ''}) {
@@ -462,32 +335,406 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 }
 
+/// Card body for a single debate. Reveals progressively more detail as the
+/// card grows taller (cards are sized in proportion to debate duration), so
+/// long debates fill their extra space with engagement stats and a party
+/// contribution bar instead of leaving it blank.
+class _DebateCardContent extends StatelessWidget {
+  final DebateFeedItem item;
+
+  const _DebateCardContent({required this.item});
+
+  // Height thresholds (px) at which each extra tier becomes visible.
+  static const double _metaTier = 100;
+  static const double _chipTier = 152;
+  static const double _pieTier = 220;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxHeight;
+        final hasParties = item.partyBreakdown.isNotEmpty;
+        final showMeta = height >= _metaTier && _metaSegments(item).isNotEmpty;
+        final chips = _contextChips(context);
+        final showChips = height >= _chipTier && chips.isNotEmpty;
+        final showPie = height >= _pieTier && hasParties;
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.title,
+                      maxLines: height >= _metaTier ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              if (showChips) ...[
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4, children: chips),
+              ],
+              if (showMeta) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _metaSegments(item).join('  ·  '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+              // Party indicator: always present (thin bar) so even the
+              // shortest cards carry a colour cue; upgrades to a pie + legend
+              // once the card is tall enough to host one.
+              if (showPie) ...[
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _PartyContributionPie(breakdown: item.partyBreakdown),
+                ),
+              ] else if (hasParties) ...[
+                const SizedBox(height: 6),
+                _PartyContributionBar(breakdown: item.partyBreakdown),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  static List<String> _metaSegments(DebateFeedItem item) {
+    final segments = <String>[];
+    if (item.speakerCount > 0) {
+      segments.add(
+        '${item.speakerCount} '
+        '${item.speakerCount == 1 ? 'speaker' : 'speakers'}',
+      );
+    }
+    if (item.contributionCount > 0) {
+      segments.add(
+        '${item.contributionCount} '
+        '${item.contributionCount == 1 ? 'contribution' : 'contributions'}',
+      );
+    }
+    final start = item.startTimecode;
+    if (start != null && start.length >= 5) {
+      segments.add(start.substring(0, 5));
+    }
+    return segments;
+  }
+
+  /// Context chips shown above the meta row: the debate's section/type and, if
+  /// the title names a bill, a tappable chip that opens bills.parliament.uk.
+  List<Widget> _contextChips(BuildContext context) {
+    final chips = <Widget>[];
+    final section = item.section?.trim() ?? '';
+    // Skip the section when it just restates the title.
+    if (section.isNotEmpty &&
+        !item.title.toLowerCase().contains(section.toLowerCase())) {
+      chips.add(_StaticChip(label: section));
+    }
+    final bill = item.relatedBillTitle;
+    if (bill != null) {
+      chips.add(
+        _ActionChipLink(
+          icon: Icons.gavel,
+          label: 'View bill',
+          onTap: () => _openBill(context, bill),
+        ),
+      );
+    }
+    return chips;
+  }
+
+  void _openBill(BuildContext context, String billTitle) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => BillView(billTitle: billTitle)),
+    );
+  }
+}
+
+/// A small non-interactive label chip (e.g. the debate's section/type).
+class _StaticChip extends StatelessWidget {
+  final String label;
+
+  const _StaticChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+      ),
+    );
+  }
+}
+
+/// A tappable outlined chip with a leading icon, used for the bill deep-link.
+class _ActionChipLink extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _ActionChipLink({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: color),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: color, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.open_in_new, size: 11, color: color),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Horizontal stacked bar showing each party's share of the contributions in a
+/// debate. Segments are sized in proportion to contribution count and coloured
+/// with each party's brand colour.
+class _PartyContributionBar extends StatelessWidget {
+  final List<PartyContribution> breakdown;
+
+  const _PartyContributionBar({required this.breakdown});
+
+  @override
+  Widget build(BuildContext context) {
+    final total = breakdown.fold<int>(0, (sum, p) => sum + p.count);
+    if (total == 0) return const SizedBox.shrink();
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: SizedBox(
+        height: 6,
+        child: Row(
+          children: [
+            for (final p in breakdown)
+              Expanded(
+                flex: p.count,
+                child: Container(color: partyColor(p.partyToken)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Pie chart of party contributions with a compact legend, shown on tall
+/// (long-duration) debate cards. Drawn with a [CustomPainter] to avoid pulling
+/// in a charting dependency.
+class _PartyContributionPie extends StatelessWidget {
+  final List<PartyContribution> breakdown;
+
+  const _PartyContributionPie({required this.breakdown});
+
+  static const Map<String, String> _labels = {
+    'labour': 'Lab',
+    'conservative': 'Con',
+    'libdem': 'Lib Dem',
+    'snp': 'SNP',
+    'green': 'Green',
+    'plaidcymru': 'Plaid Cymru',
+    'sinnfein': 'Sinn Féin',
+    'dup': 'DUP',
+    'uup': 'UUP',
+    'alliance': 'Alliance',
+    'crossbench': 'Crossbench',
+    'independent': 'Independent',
+    'speaker': 'Speaker',
+    'reform': 'Reform',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final total = breakdown.fold<int>(0, (sum, p) => sum + p.count);
+    if (total == 0) return const SizedBox.shrink();
+
+    final labelStyle = Theme.of(context).textTheme.labelMedium;
+    // At most five legend rows so the column never overflows a card.
+    final legendParties = breakdown.take(5).toList();
+    final remainder = breakdown.length - legendParties.length;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Size the pie off the available height so it always fits the card,
+        // capped so the legend keeps room (and bounded if height is unbounded).
+        final maxHeight =
+            constraints.maxHeight.isFinite ? constraints.maxHeight : 96.0;
+        final side = maxHeight.clamp(0.0, constraints.maxWidth * 0.5);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: side,
+              height: side,
+              child: CustomPaint(
+                painter: _PartyPiePainter(breakdown: breakdown, total: total),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final p in legendParties)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: partyColor(p.partyToken),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              '${_labels[p.partyToken] ?? p.partyToken}  ·  '
+                              '${p.count}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: labelStyle,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (remainder > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: Text(
+                        '+$remainder more',
+                        style: labelStyle?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PartyPiePainter extends CustomPainter {
+  final List<PartyContribution> breakdown;
+  final int total;
+
+  _PartyPiePainter({required this.breakdown, required this.total});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final side = size.shortestSide;
+    final rect = Rect.fromLTWH(
+      (size.width - side) / 2,
+      (size.height - side) / 2,
+      side,
+      side,
+    );
+    var start = -math.pi / 2;
+    for (final p in breakdown) {
+      final sweep = (p.count / total) * 2 * math.pi;
+      final paint = Paint()
+        ..style = PaintingStyle.fill
+        ..color = partyColor(p.partyToken);
+      canvas.drawArc(rect, start, sweep, true, paint);
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PartyPiePainter old) =>
+      old.total != total || old.breakdown != breakdown;
+}
+
 class _HouseAccentCard extends StatelessWidget {
   final String house;
   final Widget child;
+  final VoidCallback? onTap;
 
   const _HouseAccentCard({
     required this.house,
     required this.child,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final color = _houseAccentColor(house);
     return Card(
-      child: Row(
-        children: [
-          Container(
-            width: 6,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Row(
+          children: [
+            Container(
+              width: 6,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: const BorderRadius.horizontal(
+                  left: Radius.circular(12),
+                ),
               ),
             ),
-          ),
-          Expanded(child: child),
-        ],
+            Expanded(child: child),
+          ],
+        ),
       ),
     );
   }
@@ -496,43 +743,13 @@ class _HouseAccentCard extends StatelessWidget {
 Color _houseAccentColor(String house) {
   final h = house.toLowerCase();
   if (h.contains('lords') || h.contains('grand committee')) {
-    return const Color(0xFFB50938);
+    return HouseColors.lords;
   }
   if (h.contains('westminster hall')) {
-    return const Color(0xFF006548);
+    return HouseColors.commons;
   }
   if (h.contains('committee')) {
-    return const Color(0xFF1A5276);
+    return HouseColors.committee;
   }
-  return const Color(0xFF006548); // Commons default
-}
-
-class _DebateFeedItem {
-  final String title;
-  final int durationMinutes;
-  final String house;
-  final String debateId;
-  final int order;
-  final String? startTimecode;
-  final String? section;
-
-  const _DebateFeedItem({
-    required this.title,
-    required this.durationMinutes,
-    this.house = '',
-    this.debateId = '',
-    this.order = 0,
-    this.startTimecode,
-    this.section,
-  });
-
-  String get durationLabel => _durationLabelFromMinutes(durationMinutes);
-
-  static String _durationLabelFromMinutes(int minutes) {
-    final hoursPart = minutes ~/ 60;
-    final minutesPart = minutes % 60;
-    if (hoursPart == 0) return '${minutesPart}m';
-    if (minutesPart == 0) return '${hoursPart}h';
-    return '${hoursPart}h ${minutesPart}m';
-  }
+  return HouseColors.commons; // Commons default
 }

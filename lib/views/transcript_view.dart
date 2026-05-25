@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/gestures.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -10,11 +8,15 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../models/member.dart';
+import '../models/saved_speech.dart';
 import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
+import '../utils/house_colors.dart';
 import '../utils/parliament_live.dart';
 import '../utils/party_colors.dart' as party_util;
+import '../utils/speaker_identity.dart';
 import '../viewmodels/transcript_viewmodel.dart';
+import '../widgets/speech_actions_sheet.dart';
 import '../widgets/speech_block.dart';
 import 'member_view.dart';
 
@@ -51,17 +53,12 @@ class TranscriptView extends StatefulWidget {
 
 class _TranscriptViewState extends State<TranscriptView> {
   static const int _speechListStartIndex = 1;
-  static final RegExp _guidPattern = RegExp(
-    r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$',
-  );
 
   late TranscriptViewModel _vm;
   final ItemScrollController _scrollController = ItemScrollController();
   final ItemPositionsListener _positionsListener =
       ItemPositionsListener.create();
   final ScrollController _minimapController = ScrollController();
-  Future<_ParliamentLiveTarget>? _liveTargetFuture;
-  String? _liveTargetKey;
 
   /// Cumulative y-offsets in the minimap, one per speech plus a trailing
   /// total (so [_segmentOffsets].length == speeches.length + 1). Recomputed
@@ -158,102 +155,6 @@ class _TranscriptViewState extends State<TranscriptView> {
     await openParliamentLive(context: context, url: url, title: title);
   }
 
-  Future<_ParliamentLiveTarget> _resolveParliamentLiveTarget(
-    TranscriptViewModel vm,
-  ) async {
-    final service = context.read<ParliamentaryDataService>();
-    final debateTitle = (vm.primaryDebateTitle ?? '').trim();
-    final seekTimecode =
-        vm.parliamentLiveStartTimecodeForDebateTitle(debateTitle) ??
-            vm.sittingStartTimecode;
-    final event = await service.findLiveEventForDebate(
-      date: widget.date,
-      debateTitle: debateTitle,
-      house: vm.primaryHouse,
-    );
-
-    if (event != null) {
-      final launchUrl = parliamentLiveEventUrl(
-        event.guid,
-        timecode: seekTimecode,
-      );
-      return _ParliamentLiveTarget(
-        launchUrl: launchUrl,
-        inlineUrl: _inlineParliamentLiveUrl(launchUrl),
-        title: event.title,
-        hasDirectEvent: true,
-      );
-    }
-
-    final launchUrl = parliamentLiveSearchUrl(
-      date: widget.date,
-      house: vm.primaryHouse,
-    );
-    return _ParliamentLiveTarget(
-      launchUrl: launchUrl,
-      inlineUrl: null,
-      title: widget.date,
-      hasDirectEvent: false,
-    );
-  }
-
-  Future<_ParliamentLiveTarget> _parliamentLiveTargetFuture(
-    TranscriptViewModel vm,
-  ) {
-    final key = '${widget.date}|'
-        '${vm.primaryDebateTitle ?? ''}|'
-        '${vm.primaryHouse ?? ''}|'
-        '${vm.sittingStartTimecode}|'
-        '${vm.parliamentLiveStartTimecodeForDebateTitle(vm.primaryDebateTitle)}';
-    if (_liveTargetFuture == null || _liveTargetKey != key) {
-      _liveTargetKey = key;
-      _liveTargetFuture = _resolveParliamentLiveTarget(vm);
-    }
-    return _liveTargetFuture!;
-  }
-
-  Uri? _inlineParliamentLiveUrl(Uri launchUrl) {
-    if (!_supportsInlineWebView) return null;
-    final guid = _eventGuidFromEventUrl(launchUrl);
-    if (guid == null) return null;
-    // Keep the event page when deep-linking by timecode so it can relay the seek.
-    if (launchUrl.queryParameters.containsKey('in')) return launchUrl;
-    // Use the standalone player in-card for reliable play controls otherwise.
-    return parliamentLivePlayerUrl(guid, parentUrl: launchUrl);
-  }
-
-  bool get _supportsInlineWebView {
-    if (kIsWeb) return false;
-    return defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS;
-  }
-
-  String? _eventGuidFromEventUrl(Uri url) {
-    if (url.host.toLowerCase() != 'parliamentlive.tv') return null;
-    final segments = url.pathSegments.where((s) => s.isNotEmpty).toList();
-    if (segments.length < 3) return null;
-    if (segments[0].toLowerCase() != 'event' ||
-        segments[1].toLowerCase() != 'index') {
-      return null;
-    }
-    final guid = segments[2].toLowerCase();
-    if (!_guidPattern.hasMatch(guid)) return null;
-    return guid;
-  }
-
-  String? _timeLabelFromTimecode(String? timecode) {
-    if (timecode == null) return null;
-    final parts = timecode.trim().split(':');
-    if (parts.length < 2 || parts.length > 3) return null;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    final s = parts.length == 3 ? int.tryParse(parts[2]) : 0;
-    if (h == null || m == null || s == null) return null;
-    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
-    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
-  }
-
   /// Rightmost segment index whose top edge is at or above `y`. Used for
   /// converting a tap's local y into the speech to jump to.
   int _segmentIndexForY(double y) {
@@ -335,12 +236,15 @@ class _TranscriptViewState extends State<TranscriptView> {
                     constraints: BoxConstraints(
                       maxWidth: maxWidth + _minimapWidth,
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: _buildTranscriptList(vm)),
-                        _buildMinimap(vm),
-                      ],
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: _buildTranscriptList(vm)),
+                          _buildMinimap(vm),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -374,7 +278,11 @@ class _TranscriptViewState extends State<TranscriptView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+            Icon(
+              Icons.error_outline,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 16),
             const Text(
               'Failed to load transcript',
@@ -395,17 +303,18 @@ class _TranscriptViewState extends State<TranscriptView> {
   }
 
   Widget _buildEmptyView() {
-    return const Center(
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.article_outlined, size: 48, color: Colors.grey),
-          SizedBox(height: 16),
+          Icon(Icons.article_outlined, size: 48, color: muted),
+          const SizedBox(height: 16),
           Text(
             'No sitting transcript available for this date.\n'
             'Parliament may be in recess.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey),
+            style: TextStyle(color: muted),
           ),
         ],
       ),
@@ -435,13 +344,19 @@ class _TranscriptViewState extends State<TranscriptView> {
           final member = vm.memberForSpeech(speech);
           final timeLabel = vm.estimatedTimeForSpeechIndex(speechIndex);
           return RepaintBoundary(
-            child: SpeechBlock(
-              speech: speech,
-              member: member,
-              timeLabel: timeLabel,
-              onMemberTap: member != null
-                  ? () => _openMemberProfile(context, member)
-                  : null,
+            child: GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onLongPress: speech.speechText.trim().isEmpty
+                  ? null
+                  : () => _showSpeechActions(speech, member),
+              child: SpeechBlock(
+                speech: speech,
+                member: member,
+                timeLabel: timeLabel,
+                onMemberTap: member != null
+                    ? () => _openMemberProfile(context, member)
+                    : null,
+              ),
             ),
           );
         },
@@ -453,9 +368,8 @@ class _TranscriptViewState extends State<TranscriptView> {
     final hasVideo = parliamentLiveSectionHasVideo(vm.primarySection);
     final metTime = vm.sittingStartTimeLabel;
     final debateTitle = (vm.primaryDebateTitle ?? '').trim();
-    final debateTimecode =
-        vm.parliamentLiveStartTimecodeForDebateTitle(debateTitle);
-    final debateStartLabel = _timeLabelFromTimecode(debateTimecode);
+    final debateStartLabel =
+        vm.parliamentLiveStartLabelForDebateTitle(debateTitle);
     final showDebateStart =
         debateStartLabel != null && debateStartLabel != metTime;
     final unavailableMessage =
@@ -473,8 +387,8 @@ class _TranscriptViewState extends State<TranscriptView> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: hasVideo
-              ? FutureBuilder<_ParliamentLiveTarget>(
-                  future: _parliamentLiveTargetFuture(vm),
+              ? FutureBuilder<ParliamentLiveTarget>(
+                  future: vm.parliamentLiveTarget(),
                   builder: (context, snapshot) {
                     final target = snapshot.data;
                     const heading = 'Parliament Live';
@@ -680,6 +594,23 @@ class _TranscriptViewState extends State<TranscriptView> {
     return theme.colorScheme.outlineVariant.withValues(alpha: 0.6);
   }
 
+  void _showSpeechActions(Speech speech, Member? member) {
+    final speaker = speakerIdentityFor(speech, member);
+    showSpeechActionsSheet(
+      context,
+      speech: SavedSpeech(
+        speechId: speech.id,
+        date: widget.date,
+        displayDate: widget.displayDate,
+        debateId: speech.debateId,
+        debateTitle: speech.debateTitle,
+        speakerName: speaker.name,
+        speechText: speech.speechText,
+        savedAt: DateTime.now(),
+      ),
+    );
+  }
+
   void _openMemberProfile(BuildContext context, Member member) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => MemberView(member: member)),
@@ -690,29 +621,15 @@ class _TranscriptViewState extends State<TranscriptView> {
     if (house == null) return null;
     final h = house.toLowerCase();
     if (h.contains('lords') || h.contains('grand committee')) {
-      return const Color(0xFFB50938);
+      return HouseColors.lords;
     }
     if (h.contains('commons') || h.contains('westminster hall')) {
-      return const Color(0xFF006548);
+      return HouseColors.commons;
     }
-    if (h.contains('&')) return const Color(0xFF5B1A6B);
+    if (h.contains('&')) return HouseColors.mixed;
     // Committee rooms — use a neutral dark teal.
-    return const Color(0xFF1A5276);
+    return HouseColors.committee;
   }
-}
-
-class _ParliamentLiveTarget {
-  final Uri launchUrl;
-  final Uri? inlineUrl;
-  final String title;
-  final bool hasDirectEvent;
-
-  const _ParliamentLiveTarget({
-    required this.launchUrl,
-    required this.inlineUrl,
-    required this.title,
-    required this.hasDirectEvent,
-  });
 }
 
 class _ParliamentLiveLoadingPane extends StatelessWidget {
@@ -820,14 +737,11 @@ class _ParliamentLiveInlinePlayerState
         borderRadius: BorderRadius.circular(10),
         child: Stack(
           children: [
-            WebViewWidget(
-              controller: _controller,
-              gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-                Factory<EagerGestureRecognizer>(
-                  () => EagerGestureRecognizer(),
-                ),
-              },
-            ),
+            // No gestureRecognizers: on iOS/WKWebView an EagerGestureRecognizer
+            // greedily claims the pointer and swallows the single taps the
+            // player's controls need. Leaving it unset lets the WebView handle
+            // its own taps (matching the full-screen ParliamentLiveView).
+            WebViewWidget(controller: _controller),
             if (_isLoading)
               const Align(
                 alignment: Alignment.topCenter,
