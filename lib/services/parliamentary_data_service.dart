@@ -1,39 +1,117 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../models/boundary.dart';
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
+import '../utils/parliament_live.dart' as live_match;
 import 'api_services.dart';
+import 'boundary_service.dart';
 import 'database_service.dart';
 
 /// How long cached member profiles are considered fresh.
 const Duration _membersCacheTtl = Duration(days: 30);
 
 /// The high-level service that coordinates API calls with local SQLite caches.
-///
-/// All read operations follow the local-first strategy:
-///  1. Check whether a local cache exists.
-///  2. If not (or stale for members), fetch from the network, persist, then
-///     return the data.
-///  3. Network radio is not used again for the same data until the cache
-///     expires.
 class ParliamentaryDataService {
   final DatabaseService _db;
   final MembersApiService _membersApi;
   final HansardApiService _hansardApi;
+  final ParliamentLiveApiService _liveApi;
+  final BillsApiService _billsApi;
+  final BoundaryService _boundaryService;
 
   ParliamentaryDataService({
     DatabaseService? databaseService,
     MembersApiService? membersApiService,
     HansardApiService? hansardApiService,
+    ParliamentLiveApiService? parliamentLiveApiService,
+    BillsApiService? billsApiService,
+    BoundaryService? boundaryService,
   })  : _db = databaseService ?? DatabaseService(),
         _membersApi = membersApiService ?? MembersApiService(),
-        _hansardApi = hansardApiService ?? HansardApiService();
+        _hansardApi = hansardApiService ?? HansardApiService(),
+        _liveApi = parliamentLiveApiService ?? ParliamentLiveApiService(),
+        _billsApi = billsApiService ?? BillsApiService(),
+        _boundaryService = boundaryService ?? BoundaryService();
 
-  // ─── Members ──────────────────────────────────────────────────────────────
+  Future<Uri?> billPageUrl(String billTitle) async {
+    final id = await _billsApi.findBillId(billTitle);
+    if (id == null) return null;
+    return Uri.parse('https://bills.parliament.uk/bills/$id');
+  }
 
-  /// Returns all cached members, refreshing from the API if the cache is older
-  /// than [_membersCacheTtl] (30 days).
+  Future<int?> findBillId(String billTitle) =>
+      _billsApi.findBillId(billTitle);
+
+  Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) =>
+      _billsApi.fetchRecentBills(skip: skip, take: take);
+
+  Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async {
+    final rawSittings = await _billsApi.fetchComingUpSittings(skip: skip, take: take);
+    final sittings = List<Map<String, dynamic>>.from(rawSittings);
+
+    sittings.sort((a, b) {
+      final da = DateTime.tryParse(a["date"] ?? "") ?? DateTime(9999);
+      final db = DateTime.tryParse(b["date"] ?? "") ?? DateTime(9999);
+      return da.compareTo(db);
+    });
+
+    final billIds = <int>[];
+    for (final s in sittings) {
+      final id = (s["billId"] as num?)?.toInt();
+      if (id != null && !billIds.contains(id)) {
+        billIds.add(id);
+      }
+    }
+
+    final bills = <Map<String, dynamic>>[];
+    for (final id in billIds) {
+      final detail = await _billsApi.fetchBillDetail(id);
+      if (detail != null) {
+        final billSittings = sittings.where((s) => s["billId"] == id).toList();
+        if (billSittings.isNotEmpty) {
+          detail["_nextSittingDate"] = billSittings.first["date"];
+        }
+        bills.add(detail);
+      }
+    }
+    return bills;
+  }
+
+  Future<Map<String, dynamic>?> fetchBillDetail(int id) =>
+      _billsApi.fetchBillDetail(id);
+
+  Future<List<Map<String, dynamic>>> fetchBillStages(int id) =>
+      _billsApi.fetchBillStages(id);
+
+  Future<List<Map<String, dynamic>>> fetchBillNews(int id) =>
+      _billsApi.fetchBillNews(id);
+
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundaries() =>
+      _boundaryService.loadBoundaries(BoundaryType.constituency);
+
+  Future<List<BoundaryPolygon>> fetchCouncilBoundaries() =>
+      _boundaryService.loadBoundaries(BoundaryType.council);
+
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async {
+    final events = await _liveApi.fetchEventsForDate(date);
+    final title = debateTitle.trim();
+    if (title.isNotEmpty) {
+      final direct = live_match.bestParliamentLiveMatch(title, events);
+      if (direct != null) return direct;
+    }
+    return live_match.fallbackParliamentLiveMatchForHouse(
+      events: events,
+      house: house,
+    );
+  }
+
   Future<List<Member>> getMembers() async {
     final db = await _db.openMembersDb();
     if (await _isMembersCacheFresh(db)) {
@@ -42,8 +120,6 @@ class ParliamentaryDataService {
     return _fetchAndCacheMembers(db);
   }
 
-  /// Returns a single member by [memberId] from the local cache, or `null` if
-  /// not found.
   Future<Member?> getMemberById(int memberId) async {
     final db = await _db.openMembersDb();
     final rows = await db.query(
@@ -56,7 +132,6 @@ class ParliamentaryDataService {
     return Member.fromDb(rows.first);
   }
 
-  /// Returns resolved member IDs for previously learned speaker alias keys.
   Future<Map<String, int>> getSpeakerAliasMemberIds(
     Iterable<String> aliasKeys,
   ) async {
@@ -78,7 +153,6 @@ class ParliamentaryDataService {
     };
   }
 
-  /// Persists resolved speaker alias keys for future transcripts.
   Future<void> saveSpeakerAliasMemberIds(
       Map<String, int> aliasToMemberId) async {
     if (aliasToMemberId.isEmpty) return;
@@ -102,13 +176,6 @@ class ParliamentaryDataService {
     });
   }
 
-  // ─── Sittings ─────────────────────────────────────────────────────────────
-
-  /// Returns all speeches for [date] (YYYY-MM-DD).
-  ///
-  /// If `sitting_$date.db` does not yet exist the sitting is fetched from the
-  /// Hansard API, persisted to SQLite, then returned. Subsequent calls use
-  /// only the local database.
   Future<List<Speech>> getSpeeches(String date) async {
     final alreadyCached = await _db.sittingDbExists(date);
     if (alreadyCached) {
@@ -117,14 +184,25 @@ class ParliamentaryDataService {
     return _fetchAndCacheSitting(date);
   }
 
-  /// Fetches a single member from the Members API and stores them in the local
-  /// members DB.
-  ///
-  /// Use this when an [id] is known from the Hansard API but is absent
-  /// from the local cache — for example, former MPs who left Parliament after
-  /// the last full member sync, or newly elected members.
-  ///
-  /// Returns `null` if the API returns no data or the response cannot be parsed.
+  Future<Map<String, dynamic>?> fetchMemberDetail(int id) =>
+      _membersApi.fetchMemberDetail(id);
+
+  Future<Map<String, dynamic>?> fetchMemberBiography(int id) =>
+      _membersApi.fetchMemberBiography(id);
+
+  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) =>
+      _hansardApi.fetchMemberContributions(memberId);
+
+  Future<List<Map<String, dynamic>>> fetchMemberVoting(
+    int memberId, {
+    int house = 1,
+    int page = 1,
+  }) =>
+      _membersApi.fetchMemberVoting(memberId, house: house, page: page);
+
+  Future<List<double>?> geocodeConstituency(String constituencyName) =>
+      _membersApi.geocodeConstituency(constituencyName);
+
   Future<Member?> fetchAndCacheMemberById(int id) async {
     final detail = await _membersApi.fetchMemberDetail(id);
     if (detail == null) return null;
@@ -142,9 +220,6 @@ class ParliamentaryDataService {
     }
   }
 
-  /// Returns all debates for [date] from the local cache.
-  ///
-  /// Returns an empty list if the sitting has not been cached yet.
   Future<List<Debate>> getDebatesForDate(String date) async {
     if (!await _db.sittingDbExists(date)) return const [];
     final db = await _db.openSittingDb(date);
@@ -152,10 +227,8 @@ class ParliamentaryDataService {
     return rows.map(Debate.fromDb).toList();
   }
 
-  /// Returns `true` when a local cache already exists for [date].
   Future<bool> isSittingCached(String date) => _db.sittingDbExists(date);
 
-  /// Returns `true` if [date] has Hansard sitting content in at least one house.
   Future<bool> hasSittingData(String date) async {
     final alreadyCached = await _db.sittingDbExists(date);
     if (alreadyCached) {
@@ -167,19 +240,15 @@ class ParliamentaryDataService {
     return debates.isNotEmpty;
   }
 
-  /// Returns the closest previous parliamentary sitting date before [date].
   Future<DateTime?> getPreviousSittingDate(String date) async {
     final linked = await _hansardApi.fetchLinkedSittingDates(date);
     return linked.previousSittingDate;
   }
 
-  /// Returns the closest next parliamentary sitting date after [date].
   Future<DateTime?> getNextSittingDate(String date) async {
     final linked = await _hansardApi.fetchLinkedSittingDates(date);
     return linked.nextSittingDate;
   }
-
-  // ─── Private helpers ──────────────────────────────────────────────────────
 
   Future<bool> _isMembersCacheFresh(Database db) async {
     final rows = await db.query(
@@ -203,7 +272,6 @@ class ParliamentaryDataService {
   Future<List<Member>> _fetchAndCacheMembers(Database db) async {
     final members = await _membersApi.fetchAllMembers();
     if (members.isEmpty) {
-      // Return whatever we have cached rather than an empty list on failure.
       return _loadMembersFromDb(db);
     }
 
@@ -243,7 +311,6 @@ class ParliamentaryDataService {
       speeches.addAll(debateSpeeches);
     }
 
-    // Persist to local SQLite immediately so the network is no longer needed.
     await _persistSitting(date, debates, speeches);
     return speeches;
   }
@@ -282,11 +349,13 @@ class ParliamentaryDataService {
     return rows.map(Speech.fromDb).toList();
   }
 
-  /// Deletes all cached sitting databases. Returns the number wiped.
   Future<int> wipeDebateCache() => _db.wipeDebateCache();
 
   void dispose() {
     _membersApi.dispose();
     _hansardApi.dispose();
+    _liveApi.dispose();
+    _billsApi.dispose();
+    _boundaryService.dispose();
   }
 }

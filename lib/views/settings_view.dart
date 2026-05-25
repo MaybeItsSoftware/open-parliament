@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../services/parliamentary_data_service.dart';
 import '../services/theme_service.dart';
+import '../viewmodels/settings_viewmodel.dart';
 
 class SettingsView extends StatelessWidget {
   const SettingsView({super.key});
@@ -75,8 +76,8 @@ class SettingsView extends StatelessWidget {
     if (confirmed != true) return;
     if (!context.mounted) return;
 
-    final service = context.read<ParliamentaryDataService>();
-    final count = await service.wipeDebateCache();
+    final vm = SettingsViewModel(context.read<ParliamentaryDataService>());
+    final count = await vm.clearCachedDebates();
 
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

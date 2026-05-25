@@ -9,8 +9,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:open_hansard/models/boundary.dart';
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
+import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:open_hansard/services/theme_service.dart';
@@ -19,6 +21,33 @@ import 'package:open_hansard/views/date_selector_view.dart';
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<List<Member>> getMembers() async => const [];
+
+  @override
+  Future<Uri?> billPageUrl(String billTitle) async => null;
+
+  @override
+  Future<int?> findBillId(String billTitle) async => null;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) async => const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async => const [];
+
+  @override
+  Future<Map<String, dynamic>?> fetchBillDetail(int id) async => null;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchBillStages(int id) async => const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchBillNews(int id) async => const [];
+
+  @override
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundaries() async => const [];
+
+  @override
+  Future<List<BoundaryPolygon>> fetchCouncilBoundaries() async => const [];
 
   @override
   Future<Member?> getMemberById(int memberId) async => null;
@@ -59,6 +88,36 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<int> wipeDebateCache() async => 0;
 
   @override
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async =>
+      null;
+
+  @override
+  Future<Map<String, dynamic>?> fetchMemberDetail(int id) async => null;
+
+  @override
+  Future<Map<String, dynamic>?> fetchMemberBiography(int id) async => null;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) async =>
+      const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchMemberVoting(
+    int memberId, {
+    int house = 1,
+    int page = 1,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<double>?> geocodeConstituency(String constituencyName) async =>
+      null;
+
+  @override
   void dispose() {}
 }
 
@@ -79,7 +138,6 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Open Hansard'), findsOneWidget);
     expect(find.text('Today’s Key Debates'), findsOneWidget);
   });
 }

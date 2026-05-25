@@ -184,6 +184,120 @@ class Speech {
 
   bool get isProceduralText => !isTimestamp && !hasNamedSpeaker;
 
+  /// True for the boilerplate "The House met at …" / "The Committee met at …"
+  /// procedural opener that normally fills its own one-speech debate.
+  bool get isSittingStartAnnouncement {
+    final lower = speechText.trim().toLowerCase();
+    if (lower.length > 200) return false;
+    if (!lower.startsWith('the ')) return false;
+    if (!lower.contains(' met at ')) return false;
+    return RegExp(r'^the\s+(house|lords|committee|grand\s+committee)\b')
+        .hasMatch(lower);
+  }
+
+  /// Parses the clock time embedded in a sitting-start announcement and
+  /// returns it as seconds-since-midnight.
+  int? get sittingStartSeconds {
+    if (!isSittingStartAnnouncement) return null;
+    final lower = speechText.trim().toLowerCase();
+    final numericMatch = RegExp(
+            r'(\d{1,2})[.:](\d{2})\s*(a\.?m\.?|p\.?m\.?)?')
+        .firstMatch(lower);
+    if (numericMatch != null) {
+      var hour = int.parse(numericMatch.group(1)!);
+      final minute = int.parse(numericMatch.group(2)!);
+      final ampm = numericMatch.group(3)?.replaceAll('.', '');
+      if (ampm != null) {
+        final pm = ampm.startsWith('p');
+        if (pm && hour < 12) hour += 12;
+        if (!pm && hour == 12) hour = 0;
+      }
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+      return hour * 3600 + minute * 60;
+    }
+
+    return _parseWordClockTime(lower);
+  }
+
+  int? _parseWordClockTime(String lower) {
+    final normalized = lower.replaceAll('\u2019', "'");
+
+    if (RegExp(r'\b(noon|midday)\b').hasMatch(normalized)) {
+      return 12 * 3600;
+    }
+    if (RegExp(r'\bmidnight\b').hasMatch(normalized)) {
+      return 0;
+    }
+
+    final halfPast = RegExp(r'\bhalf[-\s]past\s+([a-z]+)\b')
+        .firstMatch(normalized);
+    if (halfPast != null) {
+      final hour = _wordToHour(halfPast.group(1));
+      if (hour != null) return hour * 3600 + 30 * 60;
+    }
+
+    final quarterPast =
+        RegExp(r'\bquarter\s+past\s+([a-z]+)\b').firstMatch(normalized);
+    if (quarterPast != null) {
+      final hour = _wordToHour(quarterPast.group(1));
+      if (hour != null) return hour * 3600 + 15 * 60;
+    }
+
+    final quarterTo =
+        RegExp(r'\bquarter\s+to\s+([a-z]+)\b').firstMatch(normalized);
+    if (quarterTo != null) {
+      final hour = _wordToHour(quarterTo.group(1));
+      if (hour != null) {
+        final adjusted = (hour + 23) % 24;
+        return adjusted * 3600 + 45 * 60;
+      }
+    }
+
+    final oclock =
+        RegExp(r"\b([a-z]+)\s+o'?clock\b").firstMatch(normalized);
+    if (oclock != null) {
+      final hour = _wordToHour(oclock.group(1));
+      if (hour != null) return hour * 3600;
+    }
+
+    final wordAmPm = RegExp(r'\b([a-z]+)\s*(a\.?m\.?|p\.?m\.?)\b')
+        .firstMatch(normalized);
+    if (wordAmPm != null) {
+      var hour = _wordToHour(wordAmPm.group(1));
+      if (hour != null) {
+        final ampm = wordAmPm.group(2)?.replaceAll('.', '');
+        if (ampm != null) {
+          final pm = ampm.startsWith('p');
+          if (pm && hour < 12) hour += 12;
+          if (!pm && hour == 12) hour = 0;
+        }
+        return hour * 3600;
+      }
+    }
+
+    return null;
+  }
+
+  int? _wordToHour(String? word) {
+    if (word == null) return null;
+    final key = word.replaceAll(RegExp(r'[^a-z]'), '');
+    const hours = <String, int>{
+      'one': 1,
+      'two': 2,
+      'three': 3,
+      'four': 4,
+      'five': 5,
+      'six': 6,
+      'seven': 7,
+      'eight': 8,
+      'nine': 9,
+      'ten': 10,
+      'eleven': 11,
+      'twelve': 12,
+    };
+    return hours[key];
+  }
+
   String? get displayTime {
     final source = (timecode ?? speechText).trim();
     if (!_isClockTime(source)) return null;

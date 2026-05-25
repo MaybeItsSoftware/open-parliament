@@ -108,13 +108,14 @@ class DatabaseService {
     final path = await sittingDbPath(date);
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE debates (
             id        TEXT PRIMARY KEY,
             title     TEXT,
             house     TEXT,
+            section   TEXT,
             order_idx INTEGER
           )
         ''');
@@ -147,6 +148,9 @@ class DatabaseService {
         }
         if (oldVersion < 3) {
           await db.execute('ALTER TABLE speeches ADD COLUMN hrs_tag TEXT');
+        }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE debates ADD COLUMN section TEXT');
         }
       },
     );

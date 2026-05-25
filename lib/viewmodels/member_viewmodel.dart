@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/member.dart';
-import '../services/api_services.dart';
+import '../services/parliamentary_data_service.dart';
 
 /// A recent Hansard contribution fetched from the search API.
 class MemberContribution {
@@ -50,6 +50,61 @@ class MemberContribution {
   }
 }
 
+/// How a member was recorded in a division.
+enum VotePosition { aye, no, teller, absent }
+
+/// A single recorded division (vote) for a member.
+class MemberVote {
+  final int divisionId;
+  final String title;
+  final DateTime date;
+  final VotePosition position;
+  final int? ayeCount;
+  final int? noCount;
+
+  const MemberVote({
+    required this.divisionId,
+    required this.title,
+    required this.date,
+    required this.position,
+    this.ayeCount,
+    this.noCount,
+  });
+
+  /// Parses the unwrapped `value` object from the Members API Voting endpoint.
+  ///
+  /// The vote is flat in the object — there is no nested division wrapper.
+  factory MemberVote.fromJson(Map<String, dynamic> json) {
+    final rawDate = (json['date'] as String?) ?? '';
+    final date = DateTime.tryParse(rawDate) ?? DateTime(1970);
+    final teller = (json['actedAsTeller'] as bool?) ?? false;
+    final aye = (json['inAffirmativeLobby'] as bool?) ?? false;
+    final no = (json['inNegativeLobby'] as bool?) ?? false;
+    return MemberVote(
+      divisionId: (json['id'] as num?)?.toInt() ?? 0,
+      title: (json['title'] as String?) ?? '',
+      date: DateTime(date.year, date.month, date.day),
+      position: teller
+          ? VotePosition.teller
+          : aye
+              ? VotePosition.aye
+              : no
+                  ? VotePosition.no
+                  : VotePosition.absent,
+      ayeCount: (json['numberInFavour'] as num?)?.toInt(),
+      noCount: (json['numberAgainst'] as num?)?.toInt(),
+    );
+  }
+}
+
+/// A set of divisions that belong to the same bill or topic, newest first.
+class VoteGroup {
+  final String title;
+  final List<MemberVote> votes;
+
+  const VoteGroup({required this.title, required this.votes});
+}
+
 /// A government or opposition post held by a member.
 class BiographyPost {
   final String name;
@@ -68,8 +123,7 @@ class BiographyPost {
 /// Loads member profile detail, biography posts, and recent contributions.
 class MemberViewModel extends ChangeNotifier {
   final Member member;
-  final MembersApiService _membersApi;
-  final HansardApiService _hansardApi;
+  final ParliamentaryDataService _service;
 
   bool _isLoading = true;
   String? _error;
@@ -80,10 +134,16 @@ class MemberViewModel extends ChangeNotifier {
   List<MemberContribution> _contributions = const [];
   List<BiographyPost> _governmentPosts = const [];
   List<BiographyPost> _oppositionPosts = const [];
+  final List<MemberVote> _votes = [];
 
-  MemberViewModel({required this.member})
-      : _membersApi = MembersApiService(),
-        _hansardApi = HansardApiService();
+  // Voting history is paged (20 per API page, 1-indexed) and loaded lazily as
+  // the profile is scrolled.
+  static const int _votesPageSize = 20;
+  int _votesPage = 0; // highest page fetched so far
+  bool _isLoadingMoreVotes = false;
+  bool _hasMoreVotes = true;
+
+  MemberViewModel(this._service, {required this.member});
 
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -94,7 +154,32 @@ class MemberViewModel extends ChangeNotifier {
   List<MemberContribution> get contributions => _contributions;
   List<BiographyPost> get governmentPosts => _governmentPosts;
   List<BiographyPost> get oppositionPosts => _oppositionPosts;
+  List<MemberVote> get votes => List.unmodifiable(_votes);
+  bool get isLoadingMoreVotes => _isLoadingMoreVotes;
+  bool get hasMoreVotes => _hasMoreVotes;
   bool get isLord => _house == 2;
+
+  /// The loaded votes grouped by bill/topic, preserving newest-first order.
+  ///
+  /// The group key is the part of the division title before the first colon
+  /// (e.g. "Victims and Courts Bill: motion to disagree with Lords Amendment 6"
+  /// groups under "Victims and Courts Bill"); titles without a colon form their
+  /// own single-division group.
+  List<VoteGroup> get voteGroups {
+    final order = <String>[];
+    final byKey = <String, List<MemberVote>>{};
+    for (final vote in _votes) {
+      final key = vote.title.split(':').first.trim();
+      final bucket = byKey.putIfAbsent(key, () {
+        order.add(key);
+        return [];
+      });
+      bucket.add(vote);
+    }
+    return [
+      for (final key in order) VoteGroup(title: key, votes: byKey[key]!),
+    ];
+  }
 
   Future<void> load() async {
     _isLoading = true;
@@ -103,9 +188,9 @@ class MemberViewModel extends ChangeNotifier {
 
     try {
       // Fire all three requests in parallel.
-      final detailFuture = _membersApi.fetchMemberDetail(member.id);
-      final biographyFuture = _membersApi.fetchMemberBiography(member.id);
-      final contributionsFuture = _hansardApi.fetchMemberContributions(member.id);
+      final detailFuture = _service.fetchMemberDetail(member.id);
+      final biographyFuture = _service.fetchMemberBiography(member.id);
+      final contributionsFuture = _service.fetchMemberContributions(member.id);
 
       final detail = await detailFuture;
       final biography = await biographyFuture;
@@ -145,9 +230,17 @@ class MemberViewModel extends ChangeNotifier {
           .where((c) => c.debateTitle.isNotEmpty)
           .toList();
 
+      // Voting history is scoped to the member's house; only fetch the first
+      // page once the house has been resolved from the detail response.
+      // Subsequent pages are pulled lazily via [loadMoreVotes] while scrolling.
+      _votes.clear();
+      _votesPage = 0;
+      _hasMoreVotes = true;
+      await _fetchNextVotesPage();
+
       // Geocode constituency for Commons MPs only.
       if (_house == 1 && _constituency != null && _constituency!.isNotEmpty) {
-        final coords = await _membersApi.geocodeConstituency(_constituency!);
+        final coords = await _service.geocodeConstituency(_constituency!);
         if (coords != null) {
           _constituencyLatLng = LatLng(coords[0], coords[1]);
         }
@@ -158,6 +251,46 @@ class MemberViewModel extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  /// Fetches the next page of voting history and appends it, deduping by
+  /// division id. Notifies listeners and toggles [isLoadingMoreVotes].
+  ///
+  /// Safe to call repeatedly (e.g. from a scroll listener) — it no-ops while a
+  /// fetch is in flight or once the history is exhausted.
+  Future<void> loadMoreVotes() async {
+    if (_isLoadingMoreVotes || !_hasMoreVotes) return;
+    _isLoadingMoreVotes = true;
+    notifyListeners();
+    try {
+      await _fetchNextVotesPage();
+    } finally {
+      _isLoadingMoreVotes = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _fetchNextVotesPage() async {
+    final raw = await _service.fetchMemberVoting(
+      member.id,
+      house: _house ?? 1,
+      page: _votesPage + 1,
+    );
+    _votesPage++;
+    if (raw.length < _votesPageSize) _hasMoreVotes = false;
+
+    final seen = _votes.map((v) => v.divisionId).toSet();
+    for (final json in raw) {
+      MemberVote? vote;
+      try {
+        vote = MemberVote.fromJson(json);
+      } catch (_) {
+        vote = null;
+      }
+      if (vote == null || vote.title.isEmpty) continue;
+      if (!seen.add(vote.divisionId)) continue;
+      _votes.add(vote);
+    }
   }
 
   List<BiographyPost> _parsePosts(List<dynamic> posts) {
@@ -178,10 +311,4 @@ class MemberViewModel extends ChangeNotifier {
         .toList();
   }
 
-  @override
-  void dispose() {
-    _membersApi.dispose();
-    _hansardApi.dispose();
-    super.dispose();
-  }
 }

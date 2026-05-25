@@ -165,6 +165,64 @@ void main() {
       expect(speech.isTimestamp, isFalse);
     });
 
+    test('isSittingStartAnnouncement matches "The House met at" variants', () {
+      Speech make(String text) => Speech(
+            id: 'sp',
+            debateId: 'd',
+            debateTitle: 't',
+            memberName: '',
+            attributedTo: '',
+            speechText: text,
+            orderIndex: 0,
+          );
+
+      expect(make('The House met at 9.30 am').isSittingStartAnnouncement,
+          isTrue);
+      expect(make('The Committee met at 14:30').isSittingStartAnnouncement,
+          isTrue);
+      expect(make("The House met at half-past Eleven o'clock")
+          .isSittingStartAnnouncement, isTrue);
+      expect(make('Question put and agreed to.').isSittingStartAnnouncement,
+          isFalse);
+      expect(make('The Minister met the delegation at noon')
+          .isSittingStartAnnouncement, isFalse);
+    });
+
+    test('sittingStartSeconds parses am/pm and 24-hour formats', () {
+      Speech make(String text) => Speech(
+            id: 'sp',
+            debateId: 'd',
+            debateTitle: 't',
+            memberName: '',
+            attributedTo: '',
+            speechText: text,
+            orderIndex: 0,
+          );
+
+      expect(make('The House met at 9.30 am').sittingStartSeconds,
+          9 * 3600 + 30 * 60);
+      expect(make('The House met at 2.30 pm').sittingStartSeconds,
+          14 * 3600 + 30 * 60);
+      expect(make('The Committee met at 14:30').sittingStartSeconds,
+          14 * 3600 + 30 * 60);
+      expect(
+        make("The House met at half-past Eleven o'clock").sittingStartSeconds,
+        11 * 3600 + 30 * 60,
+      );
+      expect(
+        make('The House met at quarter past eleven').sittingStartSeconds,
+        11 * 3600 + 15 * 60,
+      );
+      expect(
+        make('The House met at quarter to twelve').sittingStartSeconds,
+        11 * 3600 + 45 * 60,
+      );
+      expect(
+        make('The House met at noon').sittingStartSeconds,
+        12 * 3600,
+      );
+    });
+
     test('toDb / fromDb round-trip preserves all fields', () {
       const speech = Speech(
         id: 'sp-1',

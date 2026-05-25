@@ -1,9 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open_hansard/models/boundary.dart';
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
+import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
+import 'package:open_hansard/viewmodels/bill_viewmodel.dart';
+import 'package:open_hansard/viewmodels/bills_list_viewmodel.dart';
 import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
+import 'package:open_hansard/viewmodels/member_viewmodel.dart';
 import 'package:open_hansard/viewmodels/transcript_viewmodel.dart';
 
 // ─── Manual mocks ──────────────────────────────────────────────────────────
@@ -18,8 +23,49 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Map<int, Member?> memberResults = {};
   Map<String, int> speakerAliasMemberIds = {};
   Map<String, int> lastSavedSpeakerAliasMemberIds = {};
+  List<BoundaryPolygon> constituencyBoundariesResult = const [];
+  List<BoundaryPolygon> councilBoundariesResult = const [];
   Object? speechesError;
   Duration speechesDelay = Duration.zero;
+
+  @override
+  Future<Uri?> billPageUrl(String billTitle) async => null;
+
+  int? billIdResult;
+  Map<String, dynamic>? billDetailResult;
+  List<Map<String, dynamic>> billStagesResult = const [];
+  List<Map<String, dynamic>> billNewsResult = const [];
+  List<Map<String, dynamic>> recentBillsResult = const [];
+
+  @override
+  Future<int?> findBillId(String billTitle) async => billIdResult;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) async =>
+      recentBillsResult;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async => [];
+
+  @override
+  Future<Map<String, dynamic>?> fetchBillDetail(int id) async =>
+      billDetailResult;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchBillStages(int id) async =>
+      billStagesResult;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchBillNews(int id) async =>
+      billNewsResult;
+
+  @override
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundaries() async =>
+      constituencyBoundariesResult;
+
+  @override
+  Future<List<BoundaryPolygon>> fetchCouncilBoundaries() async =>
+      councilBoundariesResult;
 
   @override
   Future<bool> isSittingCached(String date) async => isCachedResult;
@@ -77,6 +123,43 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<int> wipeDebateCache() async => 0;
+
+  @override
+  Future<ParliamentLiveEvent?> findLiveEventForDebate({
+    required String date,
+    required String debateTitle,
+    String? house,
+  }) async =>
+      null;
+
+  @override
+  Future<Map<String, dynamic>?> fetchMemberDetail(int id) async => null;
+
+  @override
+  Future<Map<String, dynamic>?> fetchMemberBiography(int id) async => null;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) async =>
+      const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchMemberVoting(
+    int memberId, {
+    int house = 1,
+    int page = 1,
+  }) async {
+    if (memberVotingPages.isNotEmpty) {
+      return memberVotingPages[page] ?? const [];
+    }
+    return page == 1 ? memberVotingResult : const [];
+  }
+
+  List<Map<String, dynamic>> memberVotingResult = const [];
+  Map<int, List<Map<String, dynamic>>> memberVotingPages = const {};
+
+  @override
+  Future<List<double>?> geocodeConstituency(String constituencyName) async =>
+      null;
 
   @override
   void dispose() {}
@@ -430,6 +513,92 @@ void main() {
       expect(vm.estimatedTimeAtPosition(2), '10:10');
     });
 
+    test('parliamentLiveStartTimecode prefers explicit speech timecode',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          timecode: '10:03:04',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's2',
+          memberName: 'Bob',
+          memberId: 2,
+          timecode: '10:05:00',
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, '10:03:04');
+    });
+
+    test('parliamentLiveStartTimecode falls back to timestamp anchors',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 't1',
+          memberName: '',
+          itemType: 'Timestamp',
+          speechText: '10:00:00',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, '10:00:00');
+    });
+
+    test('parliamentLiveStartTimecode returns null when no time is available',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          orderIndex: 0,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.parliamentLiveStartTimecode, isNull);
+    });
+
+    test('parliamentLiveStartTimecodeForDebateTitle scopes by debate title',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 's1',
+          memberName: 'Alice',
+          memberId: 1,
+          debateTitle: 'Debate A',
+          timecode: '09:00:00',
+          orderIndex: 0,
+        ),
+        makeSpeech(
+          id: 's2',
+          memberName: 'Bob',
+          memberId: 2,
+          debateTitle: 'Debate B',
+          timecode: '10:15:00',
+          orderIndex: 1,
+        ),
+      ];
+
+      await vm.loadSpeeches();
+      expect(
+          vm.parliamentLiveStartTimecodeForDebateTitle('Debate B'), '10:15:00');
+    });
+
     test('primaryDebateTitle is fixed from loaded transcript', () async {
       fakeService.speechesResult = [
         makeSpeech(
@@ -507,6 +676,28 @@ void main() {
       );
     });
 
+    test('loadSpeeches drops "House met at" speech and seeds a time anchor',
+        () async {
+      fakeService.speechesResult = [
+        makeSpeech(
+          id: 'p-met',
+          memberName: '',
+          speechText: 'The House met at 9.30 am.',
+          orderIndex: 0,
+        ),
+        makeSpeech(id: 's1', memberName: 'Alice', memberId: 1, orderIndex: 1),
+        makeSpeech(id: 's2', memberName: 'Bob', memberId: 2, orderIndex: 2),
+      ];
+
+      await vm.loadSpeeches();
+      expect(vm.speeches.map((s) => s.id), ['s1', 's2']);
+      // Without timestamp rows the only anchor available comes from the
+      // sitting-start announcement — interpolation should return that time.
+      expect(vm.estimatedTimeAtPosition(0), '09:30');
+      expect(vm.sittingStartTimeLabel, '09:30');
+      expect(vm.sittingStartTimecode, '09:30:00');
+    });
+
     test('loadSpeeches does not stall on empty procedural rows', () async {
       fakeService.speechesResult = [
         makeSpeech(
@@ -523,6 +714,337 @@ void main() {
       await vm.loadSpeeches().timeout(const Duration(seconds: 2));
       expect(vm.speeches, hasLength(1));
       expect(vm.speeches.first.memberName, 'Alice');
+    });
+  });
+
+  // ─── MemberViewModel tests ────────────────────────────────────────────────
+
+  group('MemberViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    const member = Member(
+      id: 1,
+      name: 'Alice',
+      party: 'Labour',
+      partyAbbreviation: 'Lab',
+    );
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService();
+    });
+
+    test('load parses voting record newest-first', () async {
+      fakeService.memberVotingResult = [
+        {
+          'id': 100,
+          'title': 'Second Reading',
+          'date': '2024-11-04T00:00:00',
+          'inAffirmativeLobby': true,
+          'inNegativeLobby': false,
+          'actedAsTeller': false,
+          'numberInFavour': 320,
+          'numberAgainst': 210,
+        },
+        {
+          'id': 101,
+          'title': 'Amendment 7',
+          'date': '2024-10-30T00:00:00',
+          'inAffirmativeLobby': false,
+          'inNegativeLobby': false,
+          'actedAsTeller': true,
+        },
+      ];
+
+      final vm = MemberViewModel(fakeService, member: member);
+      await vm.load();
+
+      expect(vm.votes, hasLength(2));
+      expect(vm.votes.first.divisionId, 100);
+      expect(vm.votes.first.position, VotePosition.aye);
+      expect(vm.votes.first.ayeCount, 320);
+      expect(vm.votes[1].position, VotePosition.teller);
+      vm.dispose();
+    });
+
+    test('load drops vote entries without a title', () async {
+      fakeService.memberVotingResult = [
+        {'id': 1, 'date': '2024-01-01', 'inAffirmativeLobby': true},
+      ];
+
+      final vm = MemberViewModel(fakeService, member: member);
+      await vm.load();
+
+      expect(vm.votes, isEmpty);
+      vm.dispose();
+    });
+
+    test('voteGroups clusters divisions by the title before the colon',
+        () async {
+      fakeService.memberVotingResult = [
+        {
+          'id': 1,
+          'title': 'Courts Bill: Lords Amendment 6',
+          'date': '2024-11-04',
+          'inAffirmativeLobby': true,
+        },
+        {
+          'id': 2,
+          'title': 'Courts Bill: Lords Amendment 5',
+          'date': '2024-11-04',
+          'inAffirmativeLobby': true,
+        },
+        {
+          'id': 3,
+          'title': 'Privilege',
+          'date': '2024-11-03',
+          'inNegativeLobby': true,
+        },
+      ];
+
+      final vm = MemberViewModel(fakeService, member: member);
+      await vm.load();
+
+      final groups = vm.voteGroups;
+      expect(groups.map((g) => g.title), ['Courts Bill', 'Privilege']);
+      expect(groups.first.votes, hasLength(2));
+      expect(groups[1].votes.single.divisionId, 3);
+      vm.dispose();
+    });
+
+    test('loadMoreVotes appends the next page and stops at the end', () async {
+      // A full first page (20) signals there may be more; a short second page
+      // ends pagination.
+      fakeService.memberVotingPages = {
+        1: [
+          for (var i = 0; i < 20; i++)
+            {
+              'id': i,
+              'title': 'Bill A: Clause $i',
+              'date': '2024-11-04',
+              'inAffirmativeLobby': true,
+            },
+        ],
+        2: [
+          {
+            'id': 100,
+            'title': 'Bill B',
+            'date': '2024-10-01',
+            'inNegativeLobby': true,
+          },
+        ],
+      };
+
+      final vm = MemberViewModel(fakeService, member: member);
+      await vm.load();
+      expect(vm.votes, hasLength(20));
+      expect(vm.hasMoreVotes, isTrue);
+
+      await vm.loadMoreVotes();
+      expect(vm.votes, hasLength(21));
+      expect(vm.hasMoreVotes, isFalse);
+
+      // Further calls are a no-op once exhausted.
+      await vm.loadMoreVotes();
+      expect(vm.votes, hasLength(21));
+      vm.dispose();
+    });
+  });
+
+  group('DateSelectorViewModel.detectBillTitle', () {
+    test('extracts the bill name from a debate title', () {
+      expect(
+        DateSelectorViewModel.detectBillTitle('Football Governance Bill'),
+        'Football Governance Bill',
+      );
+    });
+
+    test('drops a trailing stage suffix', () {
+      expect(
+        DateSelectorViewModel.detectBillTitle(
+          'Tobacco and Vapes Bill: Second Reading',
+        ),
+        'Tobacco and Vapes Bill',
+      );
+      expect(
+        DateSelectorViewModel.detectBillTitle('Finance Bill (Committee)'),
+        'Finance Bill',
+      );
+    });
+
+    test('returns null for non-bill or procedural titles', () {
+      expect(DateSelectorViewModel.detectBillTitle('Oral Answers'), isNull);
+      expect(DateSelectorViewModel.detectBillTitle('Presentation of Bills'),
+          isNull);
+      expect(DateSelectorViewModel.detectBillTitle('Bill Presented'), isNull);
+    });
+  });
+
+  // ─── BillViewModel tests ───────────────────────────────────────────────────
+
+  group('BillViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService();
+    });
+
+    test('load sets error when no matching bill is found', () async {
+      fakeService.billIdResult = null;
+
+      final vm = BillViewModel(fakeService, billTitle: 'Imaginary Bill');
+      await vm.load();
+
+      expect(vm.bill, isNull);
+      expect(vm.error, isNotNull);
+      expect(vm.isLoading, isFalse);
+      vm.dispose();
+    });
+
+    test('load parses detail, status, newest-first stages and news', () async {
+      fakeService.billIdResult = 3968;
+      fakeService.billDetailResult = {
+        'billId': 3968,
+        'shortTitle': 'Victims and Courts Bill',
+        'longTitle': 'A Bill to make provision about victims.',
+        'summary': null,
+        'currentHouse': 'Commons',
+        'originatingHouse': 'Commons',
+        'isAct': true,
+        'isDefeated': false,
+        'billWithdrawn': null,
+        'lastUpdate': '2026-04-29T10:00:00',
+        'currentStage': {'id': 200, 'description': 'Royal Assent'},
+        'sponsors': [
+          {
+            'member': {
+              'memberId': 5035,
+              'name': 'Will Stone',
+              'party': 'Labour',
+              'memberFrom': 'Swindon North',
+            },
+          },
+        ],
+      };
+      // API returns stages chronologically; the VM reverses to newest-first.
+      fakeService.billStagesResult = [
+        {
+          'id': 100,
+          'description': '1st reading',
+          'house': 'Commons',
+          'stageSittings': [
+            {'date': '2025-05-07T00:00:00'},
+          ],
+        },
+        {
+          'id': 200,
+          'description': 'Royal Assent',
+          'house': 'Commons',
+          'stageSittings': [
+            {'date': '2026-04-29T00:00:00'},
+          ],
+        },
+      ];
+      fakeService.billNewsResult = [
+        {
+          'title': 'Royal Assent',
+          'content': '<p>The bill received <b>Royal Assent</b>.</p>',
+          'displayDate': '2026-04-29T00:00:00',
+        },
+      ];
+
+      final vm = BillViewModel(fakeService, billTitle: 'Victims and Courts');
+      await vm.load();
+
+      expect(vm.error, isNull);
+      expect(vm.bill, isNotNull);
+      expect(vm.bill!.status, BillStatus.act);
+      expect(vm.bill!.sponsors.single.name, 'Will Stone');
+
+      // Newest stage first, and the current stage is flagged.
+      expect(vm.stages.first.description, 'Royal Assent');
+      expect(vm.stages.first.isCurrent, isTrue);
+      expect(vm.stages.last.description, '1st reading');
+
+      // HTML is stripped from news content.
+      expect(vm.news.single.content, 'The bill received Royal Assent.');
+      expect(vm.billPageUrl.toString(),
+          'https://bills.parliament.uk/bills/3968');
+      vm.dispose();
+    });
+
+    test('load derives withdrawn and defeated statuses', () async {
+      fakeService.billIdResult = 1;
+      fakeService.billDetailResult = {
+        'billId': 1,
+        'shortTitle': 'Some Bill',
+        'longTitle': 'A Bill.',
+        'isAct': false,
+        'isDefeated': false,
+        'billWithdrawn': '2025-01-01T00:00:00',
+      };
+
+      final vm = BillViewModel(fakeService, billTitle: 'Some Bill');
+      await vm.load();
+      expect(vm.bill!.status, BillStatus.withdrawn);
+      vm.dispose();
+    });
+
+    test('supplied billId skips the title lookup', () async {
+      fakeService.billIdResult = null; // would fail if findBillId were used
+      fakeService.billDetailResult = {
+        'billId': 42,
+        'shortTitle': 'Pre-resolved Bill',
+        'longTitle': 'A Bill.',
+      };
+
+      final vm = BillViewModel(fakeService, billTitle: 'x', billId: 42);
+      await vm.load();
+      expect(vm.error, isNull);
+      expect(vm.bill!.shortTitle, 'Pre-resolved Bill');
+      vm.dispose();
+    });
+  });
+
+  // ─── BillsListViewModel tests ──────────────────────────────────────────────
+
+  group('BillsListViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService();
+    });
+
+    test('load parses recent bills and drops malformed entries', () async {
+      fakeService.recentBillsResult = [
+        {
+          'billId': 4123,
+          'shortTitle': 'Steel Industry (Nationalisation) Bill',
+          'currentHouse': 'Commons',
+          'lastUpdate': '2026-05-22T12:51:15',
+          'currentStage': {'description': 'Committee of the whole House'},
+        },
+        {'billId': 0, 'shortTitle': ''}, // dropped
+      ];
+
+      final vm = BillsListViewModel(fakeService);
+      await vm.load();
+
+      expect(vm.bills, hasLength(1));
+      expect(vm.bills.first.id, 4123);
+      expect(vm.bills.first.stageDescription, 'Committee of the whole House');
+      expect(vm.error, isNull);
+      vm.dispose();
+    });
+
+    test('load sets error when no bills come back', () async {
+      fakeService.recentBillsResult = const [];
+
+      final vm = BillsListViewModel(fakeService);
+      await vm.load();
+
+      expect(vm.bills, isEmpty);
+      expect(vm.error, isNotNull);
+      vm.dispose();
     });
   });
 }
