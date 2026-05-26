@@ -1,14 +1,21 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_hansard/models/boundary.dart';
+import 'package:open_hansard/models/council.dart';
+import 'package:open_hansard/models/councillor.dart';
+import 'package:open_hansard/models/councillor_profile.dart';
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:open_hansard/utils/party_colors.dart' as party_util;
 import 'package:open_hansard/viewmodels/bill_viewmodel.dart';
 import 'package:open_hansard/viewmodels/bills_list_viewmodel.dart';
+import 'package:open_hansard/viewmodels/constituency_map_viewmodel.dart';
 import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
 import 'package:open_hansard/viewmodels/member_viewmodel.dart';
+import 'package:open_hansard/viewmodels/search_viewmodel.dart';
 import 'package:open_hansard/viewmodels/transcript_viewmodel.dart';
 
 // ─── Manual mocks ──────────────────────────────────────────────────────────
@@ -25,6 +32,8 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Map<String, int> lastSavedSpeakerAliasMemberIds = {};
   List<BoundaryPolygon> constituencyBoundariesResult = const [];
   List<BoundaryPolygon> councilBoundariesResult = const [];
+  List<Council> councilsResult = const [];
+  List<Councillor> councillorsResult = const [];
   Object? speechesError;
   Duration speechesDelay = Duration.zero;
 
@@ -36,6 +45,8 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   List<Map<String, dynamic>> billStagesResult = const [];
   List<Map<String, dynamic>> billNewsResult = const [];
   List<Map<String, dynamic>> recentBillsResult = const [];
+  List<Map<String, dynamic>> searchBillsResult = const [];
+  List<Map<String, dynamic>> cachedDebateResults = const [];
 
   @override
   Future<int?> findBillId(String billTitle) async => billIdResult;
@@ -46,6 +57,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async => [];
+
+  @override
+  Future<List<Map<String, dynamic>>> searchBills(
+    String query, {
+    int take = 20,
+  }) async =>
+      searchBillsResult;
 
   @override
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async =>
@@ -66,6 +84,18 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<List<BoundaryPolygon>> fetchCouncilBoundaries() async =>
       councilBoundariesResult;
+
+  @override
+  Future<List<Council>> fetchCouncils() async => councilsResult;
+
+  @override
+  Future<List<Councillor>> fetchCouncillors() async => councillorsResult;
+
+  @override
+  Future<CouncillorProfile?> fetchCouncillorProfile(
+    Councillor councillor,
+  ) async =>
+      null;
 
   @override
   Future<bool> isSittingCached(String date) async => isCachedResult;
@@ -122,7 +152,23 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<List<Debate>> getDebatesForDate(String date) async => const [];
 
   @override
+  Future<List<Map<String, dynamic>>> searchCachedDebates(
+    String query, {
+    int limit = 40,
+  }) async =>
+      cachedDebateResults;
+
+  @override
   Future<int> wipeDebateCache() async => 0;
+
+  @override
+  Future<int> clearMapBoundaries() async => 0;
+
+  @override
+  Future<int> clearCouncilData() async => 0;
+
+  @override
+  Future<int> clearCachedMembers() async => 0;
 
   @override
   Future<ParliamentLiveEvent?> findLiveEventForDebate({
@@ -1045,6 +1091,176 @@ void main() {
       expect(vm.bills, isEmpty);
       expect(vm.error, isNotNull);
       vm.dispose();
+    });
+  });
+
+  group('ConstituencyMapViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    BoundaryPolygon square(String name) => BoundaryPolygon(
+          outer: const [
+            LatLng(0, 0),
+            LatLng(0, 1),
+            LatLng(1, 1),
+            LatLng(1, 0),
+          ],
+          name: name,
+        );
+
+    setUp(() => fakeService = _FakeParliamentaryDataService());
+
+    test('colours constituencies by the sitting MP party', () async {
+      fakeService.constituencyBoundariesResult = [
+        square('Aldershot'),
+        square('Unheld Seat'),
+      ];
+      fakeService.membersResult = const [
+        Member(
+          id: 1,
+          name: 'A MP',
+          party: 'Labour',
+          partyAbbreviation: 'Lab',
+          constituency: 'Aldershot',
+        ),
+      ];
+
+      final vm = ConstituencyMapViewModel(fakeService);
+      await vm.load(MapMode.constituency);
+
+      expect(vm.areas, hasLength(2));
+      final aldershot =
+          vm.areas.firstWhere((a) => a.name == 'Aldershot');
+      expect(aldershot.border, party_util.partyColor('Lab'));
+      expect(aldershot.controller, contains('A MP'));
+
+      // Unmatched constituency falls back to the no-control grey.
+      final unheld = vm.areas.firstWhere((a) => a.name == 'Unheld Seat');
+      expect(unheld.border, party_util.noControlColor);
+      vm.dispose();
+    });
+
+    test('colours councils by control string', () async {
+      fakeService.councilBoundariesResult = [
+        square('Adur'),
+        square('Nowhere'),
+      ];
+      fakeService.councilsResult = const [
+        Council(
+          name: 'Adur',
+          type: 'District',
+          control: 'LAB',
+          seats: {'Lab': 17, 'Green': 2},
+          total: 19,
+        ),
+      ];
+
+      final vm = ConstituencyMapViewModel(fakeService);
+      await vm.load(MapMode.council);
+
+      final adur = vm.areas.firstWhere((a) => a.name == 'Adur');
+      expect(adur.border, party_util.partyColor('Lab'));
+      expect(adur.controller, 'LAB');
+      expect(adur.council?.total, 19);
+
+      final nowhere = vm.areas.firstWhere((a) => a.name == 'Nowhere');
+      expect(nowhere.border, party_util.noControlColor);
+      expect(nowhere.council, isNull);
+      vm.dispose();
+    });
+
+    test('caches per mode and surfaces load errors', () async {
+      fakeService.constituencyBoundariesResult = [square('Aldershot')];
+      final vm = ConstituencyMapViewModel(fakeService);
+
+      await vm.load(MapMode.constituency);
+      expect(vm.error, isNull);
+      expect(vm.isLoading, isFalse);
+      expect(vm.areas, hasLength(1));
+      vm.dispose();
+    });
+  });
+
+  group('SearchViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+    late SearchViewModel vm;
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService();
+      vm = SearchViewModel(fakeService, debounceDuration: Duration.zero);
+    });
+
+    tearDown(() => vm.dispose());
+
+    test('searches members and constituencies separately', () async {
+      fakeService.membersResult = const [
+        Member(
+          id: 1,
+          name: 'Alex Smith',
+          party: 'Labour',
+          partyAbbreviation: 'Lab',
+          constituency: 'Cambridge',
+        ),
+        Member(
+          id: 2,
+          name: 'Baroness Jones',
+          party: 'Green',
+          partyAbbreviation: '',
+        ),
+      ];
+
+      await vm.searchNow('Cambridge');
+      expect(vm.results.constituencies, hasLength(1));
+      expect(vm.results.constituencies.first.name, 'Cambridge');
+      expect(vm.results.members, isEmpty);
+
+      await vm.searchNow('Jones');
+      expect(vm.results.members, hasLength(1));
+      expect(vm.results.members.first.name, 'Baroness Jones');
+    });
+
+    test('searches bills, debates, and councillors', () async {
+      fakeService.searchBillsResult = [
+        {
+          'billId': 1,
+          'shortTitle': 'Test Bill',
+          'currentHouse': 'Commons',
+          'currentStage': {'description': 'Second Reading'},
+          'lastUpdate': '2025-01-01T00:00:00',
+        },
+      ];
+      fakeService.cachedDebateResults = [
+        {
+          'debateId': 'abc',
+          'title': 'Economy',
+          'house': 'Commons',
+          'section': 'Business',
+          'date': '2025-02-01',
+        },
+      ];
+      fakeService.councilsResult = const [
+        Council(
+          name: 'Test Council',
+          type: 'Unitary',
+          control: 'LAB',
+          seats: {'Lab': 10},
+          total: 10,
+        ),
+      ];
+      fakeService.councillorsResult = const [
+        Councillor(
+          council: 'Test Council',
+          ward: 'North',
+          name: 'Pat Doe',
+          party: 'Labour',
+          partyCode: '',
+        ),
+      ];
+
+      await vm.searchNow('Test');
+      expect(vm.results.bills, hasLength(1));
+      expect(vm.results.debates, hasLength(1));
+      expect(vm.results.councillors, hasLength(1));
+      expect(vm.results.councillors.first.council, isNotNull);
     });
   });
 }

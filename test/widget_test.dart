@@ -10,6 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import 'package:open_hansard/models/boundary.dart';
+import 'package:open_hansard/models/council.dart';
+import 'package:open_hansard/models/councillor.dart';
+import 'package:open_hansard/models/councillor_profile.dart';
 import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
@@ -35,6 +38,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async => const [];
 
   @override
+  Future<List<Map<String, dynamic>>> searchBills(
+    String query, {
+    int take = 20,
+  }) async =>
+      const [];
+
+  @override
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async => null;
 
   @override
@@ -48,6 +58,18 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<List<BoundaryPolygon>> fetchCouncilBoundaries() async => const [];
+
+  @override
+  Future<List<Council>> fetchCouncils() async => const [];
+
+  @override
+  Future<List<Councillor>> fetchCouncillors() async => const [];
+
+  @override
+  Future<CouncillorProfile?> fetchCouncillorProfile(
+    Councillor councillor,
+  ) async =>
+      null;
 
   @override
   Future<Member?> getMemberById(int memberId) async => null;
@@ -73,6 +95,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<List<Debate>> getDebatesForDate(String date) async => const [];
 
   @override
+  Future<List<Map<String, dynamic>>> searchCachedDebates(
+    String query, {
+    int limit = 40,
+  }) async =>
+      const [];
+
+  @override
   Future<bool> isSittingCached(String date) async => true;
 
   @override
@@ -86,6 +115,15 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<int> wipeDebateCache() async => 0;
+
+  @override
+  Future<int> clearMapBoundaries() async => 0;
+
+  @override
+  Future<int> clearCouncilData() async => 0;
+
+  @override
+  Future<int> clearCachedMembers() async => 0;
 
   @override
   Future<ParliamentLiveEvent?> findLiveEventForDebate({

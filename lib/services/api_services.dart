@@ -1,10 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/council.dart';
+import '../models/councillor.dart';
+import '../models/councillor_profile.dart';
 import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
+import '../utils/council_control.dart';
+import '../utils/councillor_csv.dart';
+import '../utils/dc_match.dart';
 
 /// Low-level HTTP client for the official Parliament Members API.
 ///
@@ -164,6 +172,34 @@ class MembersApiService {
           .map((item) =>
               (item['value'] as Map<String, dynamic>?) ?? const <String, dynamic>{})
           .where((value) => value.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Fetches the party composition for a specific [house] ('Commons' or 'Lords')
+  /// on a specific [date].
+  ///
+  /// Returns a list of party objects containing name, abbreviation, and count.
+  Future<List<Map<String, dynamic>>> fetchStateOfTheParties(
+    String house,
+    DateTime date,
+  ) async {
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final uri = Uri.parse('$_baseUrl/Parties/StateOfTheParties/$house/$dateStr');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = (body['items'] as List<dynamic>?) ?? const [];
+      return items
+          .whereType<Map<String, dynamic>>()
+          .map((item) => (item['value'] as Map<String, dynamic>?) ?? item)
           .toList();
     } catch (_) {
       return const [];
@@ -668,6 +704,34 @@ class BillsApiService {
     }
   }
 
+  /// Searches for bills matching [query], returning the raw API items.
+  Future<List<Map<String, dynamic>>> searchBills(
+    String query, {
+    int take = 20,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const [];
+    final uri = Uri.parse(_baseUrl).replace(
+      queryParameters: <String, String>{
+        'SearchTerm': trimmed,
+        'Take': take.toString(),
+      },
+    );
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Bill search failed (HTTP ${response.statusCode}).',
+      );
+    }
+    final body = json.decode(response.body);
+    final items = (body is Map<String, dynamic>) ? body['items'] : null;
+    if (items is! List) return const [];
+    return items.whereType<Map<String, dynamic>>().toList();
+  }
+
   /// Fetches the most recently updated bills, newest first. Empty on failure.
   Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) async {
     final uri = Uri.parse(_baseUrl).replace(
@@ -775,27 +839,83 @@ class BoundaryApiService {
   BoundaryApiService({http.Client? client})
       : _client = client ?? http.Client();
 
-  Future<Map<String, dynamic>> fetchConstituencyBoundaries() =>
-      _fetchBoundaries(_constituencyServiceUrl);
-
-  Future<Map<String, dynamic>> fetchCouncilBoundaries() =>
-      _fetchBoundaries(_councilServiceUrl);
-
-  Future<Map<String, dynamic>> _fetchBoundaries(String serviceUrl) async {
-    final layerUrl = '$serviceUrl/0';
-    final pageSize = await _fetchMaxRecordCount(layerUrl);
-    final total = await _fetchCount(layerUrl);
-    final allFeatures = <Map<String, dynamic>>[];
-    int offset = 0;
-    while (offset < total) {
-      final page = await _fetchPage(
-        layerUrl,
-        offset: offset,
-        pageSize: pageSize,
+  Future<Map<String, dynamic>> fetchConstituencyBoundaries() => _fetchBoundaries(
+        _constituencyServiceUrl,
+        // ONS Westminster constituency code + name fields.
+        outFields: 'PCON24CD,PCON24NM',
+        // Constituencies are small areas, so the default 220 m tolerance still
+        // looked blocky when zoomed in. ~55 m gives crisp borders; the payload
+        // grows but parses off-isolate and renders fine at this count.
+        maxAllowableOffset: _constituencyMaxAllowableOffset,
       );
-      allFeatures.addAll(page);
-      offset += page.length;
-      if (page.isEmpty) break;
+
+  Future<Map<String, dynamic>> fetchCouncilBoundaries() => _fetchBoundaries(
+        _councilServiceUrl,
+        // ONS local-authority-district code + name fields.
+        outFields: 'LAD24CD,LAD24NM',
+      );
+
+  /// Cap on features requested per page. The server advertises a far larger
+  /// maxRecordCount (2000), but asking for that many detailed geometries in one
+  /// request makes the gateway exceed our timeout. A few island-heavy seats
+  /// (e.g. the Scottish isles) are so detailed that a single one takes ~30s to
+  /// simplify and serialise server-side regardless of page size, so we keep
+  /// pages small to bound how many heavy features can land in one request.
+  static const int _maxPageSize = 50;
+
+  /// How many pages to fetch at once. Kept low: the shared ArcGIS gateway slows
+  /// every in-flight request under load, which can push a heavy page past the
+  /// timeout, so modest parallelism buys speed without starving the slow ones.
+  static const int _pageConcurrency = 3;
+
+  /// Douglas–Peucker simplification tolerance (in `outSR` degrees) applied
+  /// server-side. Higher is blockier and lighter, lower is smoother and
+  /// heavier. ~0.002° ≈ 220 m keeps borders smooth without jagged stair-steps;
+  /// 0.01 (~1.1 km) made constituency outlines visibly blocky. The gateway's
+  /// per-page time is dominated by fixed simplification cost, not output size,
+  /// so finer detail here costs payload (parsed off-isolate) but not latency.
+  /// Councils use this default; their coastline-dense geometry is already ~7.5 MB
+  /// at 220 m, so going finer would balloon the cache and jank rendering.
+  static const double _defaultMaxAllowableOffset = 0.002;
+
+  /// Finer tolerance for constituencies (~55 m). They are small subdivisions
+  /// with far fewer vertices each than councils, so this sharpens their outlines
+  /// without the cache/render cost that the same value would impose on councils.
+  static const double _constituencyMaxAllowableOffset = 0.0005;
+
+  Future<Map<String, dynamic>> _fetchBoundaries(
+    String serviceUrl, {
+    required String outFields,
+    double maxAllowableOffset = _defaultMaxAllowableOffset,
+  }) async {
+    final layerUrl = '$serviceUrl/0';
+    // Order by the first requested field (the unique area code) so that
+    // resultOffset paging is stable.
+    final orderBy = outFields.split(',').first;
+    final serverMax = await _fetchMaxRecordCount(layerUrl);
+    final pageSize = math.min(serverMax, _maxPageSize);
+    final total = await _fetchCount(layerUrl);
+
+    final offsets = [for (var o = 0; o < total; o += pageSize) o];
+    final allFeatures = <Map<String, dynamic>>[];
+    // Fetch in concurrency-limited batches; offsets are ascending and
+    // Future.wait preserves order, so features stay correctly sequenced.
+    for (var i = 0; i < offsets.length; i += _pageConcurrency) {
+      final batch = offsets.skip(i).take(_pageConcurrency);
+      final pages = await Future.wait([
+        for (final offset in batch)
+          _fetchPage(
+            layerUrl,
+            offset: offset,
+            pageSize: pageSize,
+            outFields: outFields,
+            orderBy: orderBy,
+            maxAllowableOffset: maxAllowableOffset,
+          ),
+      ]);
+      for (final page in pages) {
+        allFeatures.addAll(page);
+      }
     }
     return {
       'type': 'FeatureCollection',
@@ -803,12 +923,51 @@ class BoundaryApiService {
     };
   }
 
+  /// Status codes worth retrying: ArcGIS's shared gateway returns these
+  /// intermittently under load, especially 504 on the larger geometry pages.
+  static const Set<int> _transientStatus = {429, 500, 502, 503, 504};
+  static const int _maxAttempts = 4;
+  // Generous: a handful of island-heavy constituencies take ~30s to render
+  // server-side even in a 50-feature page, so 30s timed them out. 60s gives
+  // those pages first-attempt headroom; the retry loop covers genuine stalls.
+  static const Duration _requestTimeout = Duration(seconds: 60);
+
+  /// GETs [uri], retrying transient gateway failures and network/timeouts with
+  /// exponential backoff. Permanent responses (e.g. 200, 404) return straight
+  /// away so callers can interpret them; only repeated transient failures throw.
+  Future<http.Response> _get(Uri uri) async {
+    Object? lastError;
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      try {
+        final response = await _client
+            .get(uri, headers: {'Accept': 'application/json'})
+            .timeout(_requestTimeout);
+        if (!_transientStatus.contains(response.statusCode)) {
+          return response;
+        }
+        lastError = BoundaryApiException(
+          'Boundary request failed (${response.statusCode}).',
+        );
+      } on TimeoutException {
+        lastError = const BoundaryApiException('Boundary request timed out.');
+      } on http.ClientException catch (e) {
+        lastError = BoundaryApiException('Boundary request failed: ${e.message}');
+      }
+      if (attempt < _maxAttempts) {
+        // 0.5s, 1s, 2s between attempts.
+        await Future<void>.delayed(
+          Duration(milliseconds: 500 * (1 << (attempt - 1))),
+        );
+      }
+    }
+    throw lastError is BoundaryApiException
+        ? lastError
+        : BoundaryApiException('Boundary request failed: $lastError');
+  }
+
   Future<int> _fetchMaxRecordCount(String layerUrl) async {
     final uri = Uri.parse('$layerUrl?f=pjson');
-    final response = await _client.get(
-      uri,
-      headers: {'Accept': 'application/json'},
-    );
+    final response = await _get(uri);
     if (response.statusCode != 200) {
       throw BoundaryApiException(
         'Boundary layer metadata failed (${response.statusCode}).',
@@ -826,10 +985,7 @@ class BoundaryApiService {
         'f': 'json',
       },
     );
-    final response = await _client.get(
-      uri,
-      headers: {'Accept': 'application/json'},
-    );
+    final response = await _get(uri);
     if (response.statusCode != 200) {
       throw BoundaryApiException(
         'Boundary count query failed (${response.statusCode}).',
@@ -847,25 +1003,25 @@ class BoundaryApiService {
     String layerUrl, {
     required int offset,
     required int pageSize,
+    required String outFields,
+    required String orderBy,
+    required double maxAllowableOffset,
   }) async {
     final uri = Uri.parse('$layerUrl/query').replace(
       queryParameters: {
         'where': '1=1',
-        'outFields': 'OBJECTID',
+        'outFields': outFields,
         'returnGeometry': 'true',
-        'orderByFields': 'OBJECTID',
+        'orderByFields': orderBy,
         'f': 'geojson',
         'outSR': '4326',
         'resultOffset': offset.toString(),
         'resultRecordCount': pageSize.toString(),
         'geometryPrecision': '5',
-        'maxAllowableOffset': '0.01',
+        'maxAllowableOffset': maxAllowableOffset.toString(),
       },
     );
-    final response = await _client.get(
-      uri,
-      headers: {'Accept': 'application/json'},
-    );
+    final response = await _get(uri);
     if (response.statusCode != 200) {
       throw BoundaryApiException(
         'Boundary query failed (${response.statusCode}).',
@@ -877,6 +1033,229 @@ class BoundaryApiService {
       throw const FormatException('Boundary query returned invalid features.');
     }
     return features.whereType<Map<String, dynamic>>().toList();
+  }
+
+  void dispose() => _client.close();
+}
+
+/// Thrown when the OpenCouncilData control table cannot be fetched.
+class CouncilControlApiException implements Exception {
+  final String message;
+  const CouncilControlApiException(this.message);
+
+  @override
+  String toString() => 'CouncilControlApiException: $message';
+}
+
+/// Fetches political control of every GB local authority from OpenCouncilData.
+///
+/// There is no Parliament API for council control; OpenCouncilData publishes it
+/// as an HTML table at `councils.php`, which we scrape into council → control.
+class CouncilControlApiService {
+  static const String _url =
+      'https://opencouncildata.co.uk/councils.php?model=&y=0';
+
+  final http.Client _client;
+
+  CouncilControlApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  Future<List<Council>> fetchCouncils({int? year}) async {
+    final uri = year != null && year > 0
+        ? Uri.parse('https://opencouncildata.co.uk/councils.php?model=&y=$year')
+        : Uri.parse(_url);
+    final response = await _client.get(
+      uri,
+      headers: {
+        'Accept': 'text/html',
+        'User-Agent': 'open-hansard/1.0',
+      },
+    );
+    if (response.statusCode != 200) {
+      throw CouncilControlApiException(
+        'Council control fetch failed (${response.statusCode}).',
+      );
+    }
+    final councils = parseCouncils(response.body);
+    if (councils.isEmpty) {
+      throw const CouncilControlApiException(
+        'Council control table was empty or unparseable.',
+      );
+    }
+    return councils;
+  }
+
+  void dispose() => _client.close();
+}
+
+/// Thrown when the OpenCouncilData councillors CSV cannot be fetched.
+class CouncillorApiException implements Exception {
+  final String message;
+  const CouncillorApiException(this.message);
+
+  @override
+  String toString() => 'CouncillorApiException: $message';
+}
+
+/// Fetches every UK councillor (name, ward, party) from OpenCouncilData's free
+/// annual CSV at `csv2.php?y=<year>`.
+///
+/// The snapshot is published shortly after each May election, so early in a
+/// year the current-year file may not exist yet — we fall back one year.
+class CouncillorApiService {
+  static String _url(int year) =>
+      'https://opencouncildata.co.uk/csv2.php?y=$year';
+
+  final http.Client _client;
+
+  CouncillorApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  Future<List<Councillor>> fetchCouncillors({int? year}) async {
+    final wanted = year ?? DateTime.now().toUtc().year;
+    // Try the requested year, then the previous one if it isn't published yet.
+    for (final y in {wanted, wanted - 1}) {
+      final councillors = await _fetchYear(y);
+      if (councillors.isNotEmpty) return councillors;
+    }
+    throw const CouncillorApiException(
+      'Councillor CSV was empty or unavailable.',
+    );
+  }
+
+  Future<List<Councillor>> _fetchYear(int year) async {
+    final http.Response response;
+    try {
+      response = await _client.get(
+        Uri.parse(_url(year)),
+        headers: {
+          'Accept': 'text/csv',
+          'User-Agent': 'open-hansard/1.0',
+        },
+      );
+    } on Object {
+      return const [];
+    }
+    if (response.statusCode != 200) return const [];
+    return parseCouncillors(response.body);
+  }
+
+  void dispose() => _client.close();
+}
+
+/// One elected person in a council's Democracy Club ballots — the join row
+/// between an OpenCouncilData councillor and a DC person id (and so a photo).
+class DcElectedCandidate {
+  final int personId;
+  final String name;
+  final String ward;
+  final String party;
+
+  const DcElectedCandidate({
+    required this.personId,
+    required this.name,
+    required this.ward,
+    required this.party,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'personId': personId,
+        'name': name,
+        'ward': ward,
+        'party': party,
+      };
+
+  factory DcElectedCandidate.fromJson(Map<String, dynamic> json) =>
+      DcElectedCandidate(
+        personId: (json['personId'] as num?)?.toInt() ?? 0,
+        name: (json['name'] as String?) ?? '',
+        ward: (json['ward'] as String?) ?? '',
+        party: (json['party'] as String?) ?? '',
+      );
+}
+
+/// Read-only client for Democracy Club's Candidates API (CC BY 4.0).
+///
+/// DC has no person-name search, so we reach a councillor's photo via their
+/// council's local-election ballots: list the elected people per `election_id`,
+/// then fetch the matched person for their image and contact details.
+class DemocracyClubApiService {
+  static const String _baseUrl =
+      'https://candidates.democracyclub.org.uk/api/next';
+
+  /// Cap on ballot pages per election to bound a cold roster build.
+  static const int _maxBallotPages = 6;
+
+  final http.Client _client;
+
+  DemocracyClubApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  /// Every person recorded as elected across [slug]'s recent local elections,
+  /// deduplicated by person id. Councils that elect by thirds appear under
+  /// several election dates, so we union them all. Returns an empty list on
+  /// failure — enrichment is best-effort.
+  Future<List<DcElectedCandidate>> fetchElectedForCouncil(String slug) async {
+    final byPerson = <int, DcElectedCandidate>{};
+    for (final date in kLocalElectionDates) {
+      await _collectElected('local.$slug.$date', byPerson);
+    }
+    return byPerson.values.toList();
+  }
+
+  Future<void> _collectElected(
+    String electionId,
+    Map<int, DcElectedCandidate> out,
+  ) async {
+    var uri = Uri.parse(
+      '$_baseUrl/ballots/?format=json&page_size=200&election_id=$electionId',
+    );
+    for (var page = 0; page < _maxBallotPages; page++) {
+      final Map<String, dynamic> body;
+      try {
+        final response = await _client.get(uri);
+        if (response.statusCode != 200) return;
+        body = jsonDecode(response.body) as Map<String, dynamic>;
+      } on Object {
+        return;
+      }
+      for (final ballot in (body['results'] as List<dynamic>? ?? const [])) {
+        if (ballot is! Map<String, dynamic>) continue;
+        final ward = ((ballot['post'] as Map<String, dynamic>?)?['label']
+                as String?) ??
+            '';
+        for (final c
+            in (ballot['candidacies'] as List<dynamic>? ?? const [])) {
+          if (c is! Map<String, dynamic> || c['elected'] != true) continue;
+          final person = c['person'] as Map<String, dynamic>?;
+          final id = (person?['id'] as num?)?.toInt();
+          if (id == null) continue;
+          out[id] = DcElectedCandidate(
+            personId: id,
+            name: (person?['name'] as String?) ?? '',
+            ward: ward,
+            party: (c['party_name'] as String?) ?? '',
+          );
+        }
+      }
+      final next = body['next'] as String?;
+      if (next == null || next.isEmpty) return;
+      uri = Uri.parse(next);
+    }
+  }
+
+  /// Fetches a single person's profile (photo, email, links, election history),
+  /// or null on failure.
+  Future<CouncillorProfile?> fetchPerson(int personId) async {
+    try {
+      final response = await _client
+          .get(Uri.parse('$_baseUrl/people/$personId/?format=json'));
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return CouncillorProfile.fromPersonJson(body);
+    } on Object {
+      return null;
+    }
   }
 
   void dispose() => _client.close();

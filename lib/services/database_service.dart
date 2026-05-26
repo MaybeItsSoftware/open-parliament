@@ -32,7 +32,7 @@ class DatabaseService {
     final path = await membersDbPath();
     return openDatabase(
       path,
-      version: 3,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE members (
@@ -40,7 +40,8 @@ class DatabaseService {
             name             TEXT    NOT NULL,
             party            TEXT,
             party_abbreviation TEXT,
-            thumbnail_url    TEXT
+            thumbnail_url    TEXT,
+            constituency     TEXT
           )
         ''');
         await db.execute('''
@@ -74,6 +75,15 @@ class DatabaseService {
             ON speaker_aliases(member_id)
           ''');
         }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE members ADD COLUMN constituency TEXT');
+        }
+        if (oldVersion < 5) {
+          // Existing member rows predate the constituency column (it was added
+          // empty). Drop the freshness marker so the next read re-fetches
+          // members with their constituency populated, enabling the control map.
+          await db.delete('meta', where: 'key = ?', whereArgs: ['last_fetched']);
+        }
       },
     );
   }
@@ -93,6 +103,33 @@ class DatabaseService {
       }
     }
     return count;
+  }
+
+  /// Clears cached MP profiles and drops the freshness marker so the next read
+  /// re-fetches them. Speaker aliases are left intact (member ids are stable).
+  /// Returns the number of member rows removed.
+  Future<int> wipeMembersCache() async {
+    final db = await openMembersDb();
+    final count = await db.delete('members');
+    await db.delete('meta', where: 'key = ?', whereArgs: ['last_fetched']);
+    return count;
+  }
+
+  /// Lists cached sitting dates (YYYY-MM-DD) for every local sitting database.
+  Future<List<String>> cachedSittingDates() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dates = <String>[];
+    final pattern = RegExp(r'^sitting_(\d{4}-\d{2}-\d{2})\.db$');
+    await for (final entity in dir.list()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      final match = pattern.firstMatch(name);
+      if (match != null) {
+        dates.add(match.group(1)!);
+      }
+    }
+    dates.sort((a, b) => b.compareTo(a));
+    return dates;
   }
 
   // ─── Sitting DB ───────────────────────────────────────────────────────────

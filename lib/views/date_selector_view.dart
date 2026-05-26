@@ -10,7 +10,6 @@ import '../utils/party_colors.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
-import 'settings_view.dart';
 import 'transcript_view.dart';
 
 /// The redesigned landing screen for the app's main page.
@@ -103,8 +102,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
-  /// Inline top bar: the drawer button and the settings button flank the
-  /// date-selector box, both sitting outside its tinted background.
+  /// Inline top bar: the drawer button sits outside the date-selector box's
+  /// tinted background.
   Widget _buildTopBar(
     BuildContext context,
     DateSelectorViewModel vm,
@@ -122,14 +121,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         const SizedBox(width: 4),
         Expanded(
           child: _buildContextualDateSelector(context, vm, selectedDay),
-        ),
-        const SizedBox(width: 4),
-        IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          tooltip: 'Settings',
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const SettingsView()),
-          ),
         ),
       ],
     );
@@ -448,7 +439,7 @@ class _DebateCardContent extends StatelessWidget {
     if (bill != null) {
       chips.add(
         _ActionChipLink(
-          icon: Icons.gavel,
+          icon: Icons.article,
           label: 'View bill',
           onTap: () => _openBill(context, bill),
         ),

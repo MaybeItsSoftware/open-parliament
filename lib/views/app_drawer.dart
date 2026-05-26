@@ -4,10 +4,11 @@ import 'bills_list_view.dart';
 import 'constituency_map_view.dart';
 import 'date_selector_view.dart';
 import 'saved_speeches_view.dart';
+import 'search_view.dart';
 import 'settings_view.dart';
 
 /// The top-level sections reachable from the navigation drawer.
-enum AppDestination { debates, bills, map, saved }
+enum AppDestination { debates, search, bills, map, saved }
 
 /// Shared navigation drawer for the app's main views.
 ///
@@ -59,7 +60,13 @@ class AppDrawer extends StatelessWidget {
             ),
             _tile(
               context,
-              icon: Icons.gavel_outlined,
+              icon: Icons.search,
+              label: 'Search',
+              destination: AppDestination.search,
+            ),
+            _tile(
+              context,
+              icon: Icons.article_outlined,
               label: 'Recent Bills',
               destination: AppDestination.bills,
             ),
@@ -126,6 +133,8 @@ class AppDrawer extends StatelessWidget {
     switch (destination) {
       case AppDestination.debates:
         _replaceWith(context, const DateSelectorView());
+      case AppDestination.search:
+        _replaceWith(context, const SearchView());
       case AppDestination.bills:
         _replaceWith(context, const BillsListView());
       case AppDestination.map:

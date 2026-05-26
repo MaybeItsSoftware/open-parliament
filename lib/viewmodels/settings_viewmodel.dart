@@ -12,4 +12,13 @@ class SettingsViewModel extends ChangeNotifier {
 
   /// Deletes all cached sitting databases. Returns the number wiped.
   Future<int> clearCachedDebates() => _service.wipeDebateCache();
+
+  /// Deletes cached map boundary geometry. Returns the number of files removed.
+  Future<int> clearMapBoundaries() => _service.clearMapBoundaries();
+
+  /// Deletes cached council data (councillors + control). Returns files removed.
+  Future<int> clearCouncilData() => _service.clearCouncilData();
+
+  /// Clears cached MP profiles. Returns the number of profiles removed.
+  Future<int> clearCachedMembers() => _service.clearCachedMembers();
 }

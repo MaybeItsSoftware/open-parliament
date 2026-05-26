@@ -12,6 +12,7 @@ import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/member_viewmodel.dart';
 import 'transcript_view.dart';
+import 'party_view.dart';
 
 /// Profile page for a single parliamentary member.
 ///
@@ -262,11 +263,16 @@ class _MemberViewState extends State<MemberView> {
             ),
             if (vm.member.party.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(
-                vm.member.party,
-                style: TextStyle(
-                  color: fgColor.withValues(alpha: 0.85),
-                  fontSize: 13,
+              InkWell(
+                onTap: () => _openPartyPage(context, vm.member.party),
+                child: Text(
+                  vm.member.party,
+                  style: TextStyle(
+                    color: fgColor.withValues(alpha: 0.85),
+                    fontSize: 13,
+                    decoration: TextDecoration.underline,
+                    decorationColor: fgColor.withValues(alpha: 0.5),
+                  ),
                 ),
               ),
             ],
@@ -334,11 +340,14 @@ class _MemberViewState extends State<MemberView> {
                   width: 1,
                 ),
               ),
-              child: Text(
-                vm.member.party,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: pColor,
-                  fontWeight: FontWeight.w600,
+              child: InkWell(
+                onTap: () => _openPartyPage(context, vm.member.party),
+                child: Text(
+                  vm.member.party,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: pColor,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
@@ -401,7 +410,7 @@ class _MemberViewState extends State<MemberView> {
               ),
             ),
             children: [
-              buildCartoLightTileLayer(),
+              buildCartoLightTileLayer(context),
               MarkerLayer(
                 markers: [
                   Marker(
@@ -762,6 +771,14 @@ class _MemberViewState extends State<MemberView> {
   }
 
   // ─── Navigation ───────────────────────────────────────────────────────────
+
+  void _openPartyPage(BuildContext context, String partyName) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PartyView(partyName: partyName),
+      ),
+    );
+  }
 
   void _openTranscript(BuildContext context, DateTime date) {
     final dateStr =

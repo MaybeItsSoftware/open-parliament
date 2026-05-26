@@ -8,6 +8,7 @@ import '../utils/house_colors.dart';
 import '../viewmodels/bills_list_viewmodel.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
+import 'date_selector_view.dart';
 
 /// Main view listing the most recently updated bills before Parliament.
 class BillsListView extends StatefulWidget {
@@ -53,22 +54,44 @@ class _BillsListViewState extends State<BillsListView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Bills"),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+        title: const Row(
+          children: [
+            Icon(Icons.article_outlined),
+            SizedBox(width: 8),
+            Text("Bills"),
+          ],
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
             child: SegmentedButton<bool>(
               segments: const [
-                ButtonSegment(value: false, label: Text("Recent"), icon: Icon(Icons.update)),
-                ButtonSegment(value: true, label: Text("Coming Up"), icon: Icon(Icons.event)),
+                ButtonSegment(
+                  value: false,
+                  label: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text("Recent"),
+                  ),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text("Coming Up"),
+                  ),
+                ),
               ],
               selected: {_vm.showComingUp},
-              onSelectionChanged: (val) => setState(() => _vm.toggleComingUp(val.first)),
+              onSelectionChanged: (val) =>
+                  setState(() => _vm.toggleComingUp(val.first)),
               showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
             ),
           ),
-        ),
+        ],
       ),
       drawer: const AppDrawer(current: AppDestination.bills),
       body: ChangeNotifierProvider.value(
@@ -119,7 +142,7 @@ class _BillsListViewState extends State<BillsListView> {
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: hColor.withValues(alpha: 0.15),
-        child: Icon(Icons.gavel, color: hColor, size: 20),
+        child: Icon(Icons.article, color: hColor, size: 20),
       ),
       title: Text(
         bill.title,
@@ -149,7 +172,7 @@ class _BillsListViewState extends State<BillsListView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.gavel_outlined, size: 48),
+            const Icon(Icons.article_outlined, size: 48),
             const SizedBox(height: 12),
             Text(vm.error ?? 'No recent bills found.'),
             const SizedBox(height: 12),

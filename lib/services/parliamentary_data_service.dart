@@ -1,6 +1,9 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/boundary.dart';
+import '../models/council.dart';
+import '../models/councillor.dart';
+import '../models/councillor_profile.dart';
 import '../models/debate.dart';
 import '../models/member.dart';
 import '../models/parliament_live_event.dart';
@@ -8,10 +11,14 @@ import '../models/speech.dart';
 import '../utils/parliament_live.dart' as live_match;
 import 'api_services.dart';
 import 'boundary_service.dart';
+import 'council_control_service.dart';
+import 'councillor_enrichment_service.dart';
+import 'councillor_service.dart';
 import 'database_service.dart';
 
 /// How long cached member profiles are considered fresh.
 const Duration _membersCacheTtl = Duration(days: 30);
+const Duration _recentBillsCacheTtl = Duration(minutes: 30);
 
 /// The high-level service that coordinates API calls with local SQLite caches.
 class ParliamentaryDataService {
@@ -21,6 +28,11 @@ class ParliamentaryDataService {
   final ParliamentLiveApiService _liveApi;
   final BillsApiService _billsApi;
   final BoundaryService _boundaryService;
+  final CouncilControlService _councilControlService;
+  final CouncillorService _councillorService;
+  final CouncillorEnrichmentService _councillorEnrichmentService;
+  List<Map<String, dynamic>>? _recentBillsCache;
+  DateTime? _recentBillsCachedAt;
 
   ParliamentaryDataService({
     DatabaseService? databaseService,
@@ -29,12 +41,20 @@ class ParliamentaryDataService {
     ParliamentLiveApiService? parliamentLiveApiService,
     BillsApiService? billsApiService,
     BoundaryService? boundaryService,
+    CouncilControlService? councilControlService,
+    CouncillorService? councillorService,
+    CouncillorEnrichmentService? councillorEnrichmentService,
   })  : _db = databaseService ?? DatabaseService(),
         _membersApi = membersApiService ?? MembersApiService(),
         _hansardApi = hansardApiService ?? HansardApiService(),
         _liveApi = parliamentLiveApiService ?? ParliamentLiveApiService(),
         _billsApi = billsApiService ?? BillsApiService(),
-        _boundaryService = boundaryService ?? BoundaryService();
+        _boundaryService = boundaryService ?? BoundaryService(),
+        _councilControlService =
+            councilControlService ?? CouncilControlService(),
+        _councillorService = councillorService ?? CouncillorService(),
+        _councillorEnrichmentService =
+            councillorEnrichmentService ?? CouncillorEnrichmentService();
 
   Future<Uri?> billPageUrl(String billTitle) async {
     final id = await _billsApi.findBillId(billTitle);
@@ -45,8 +65,26 @@ class ParliamentaryDataService {
   Future<int?> findBillId(String billTitle) =>
       _billsApi.findBillId(billTitle);
 
-  Future<List<Map<String, dynamic>>> fetchRecentBills({int skip = 0, int take = 40}) =>
-      _billsApi.fetchRecentBills(skip: skip, take: take);
+  Future<List<Map<String, dynamic>>> fetchRecentBills({
+    int skip = 0,
+    int take = 40,
+  }) async {
+    if (skip == 0) {
+      final cached = _recentBillsCache;
+      final cachedAt = _recentBillsCachedAt;
+      if (cached != null &&
+          cachedAt != null &&
+          DateTime.now().toUtc().difference(cachedAt) < _recentBillsCacheTtl) {
+        return cached;
+      }
+    }
+    final bills = await _billsApi.fetchRecentBills(skip: skip, take: take);
+    if (skip == 0 && bills.isNotEmpty) {
+      _recentBillsCache = bills;
+      _recentBillsCachedAt = DateTime.now().toUtc();
+    }
+    return bills;
+  }
 
   Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async {
     final rawSittings = await _billsApi.fetchComingUpSittings(skip: skip, take: take);
@@ -80,6 +118,12 @@ class ParliamentaryDataService {
     return bills;
   }
 
+  Future<List<Map<String, dynamic>>> searchBills(
+    String query, {
+    int take = 20,
+  }) =>
+      _billsApi.searchBills(query, take: take);
+
   Future<Map<String, dynamic>?> fetchBillDetail(int id) =>
       _billsApi.fetchBillDetail(id);
 
@@ -94,6 +138,19 @@ class ParliamentaryDataService {
 
   Future<List<BoundaryPolygon>> fetchCouncilBoundaries() =>
       _boundaryService.loadBoundaries(BoundaryType.council);
+
+  /// Every GB local authority with its control string and seat composition.
+  Future<List<Council>> fetchCouncils() =>
+      _councilControlService.loadCouncils();
+
+  /// Every UK councillor (name, ward, party), cached nationally.
+  Future<List<Councillor>> fetchCouncillors() =>
+      _councillorService.loadCouncillors();
+
+  /// Democracy Club enrichment (photo, email, links, first elected) for a
+  /// single councillor, or null when no match is found. Best-effort.
+  Future<CouncillorProfile?> fetchCouncillorProfile(Councillor councillor) =>
+      _councillorEnrichmentService.profileFor(councillor);
 
   Future<ParliamentLiveEvent?> findLiveEventForDebate({
     required String date,
@@ -227,6 +284,44 @@ class ParliamentaryDataService {
     return rows.map(Debate.fromDb).toList();
   }
 
+  /// Searches locally cached debate titles for [query], newest sittings first.
+  ///
+  /// Returns maps with keys: debateId, title, house, section, date.
+  Future<List<Map<String, dynamic>>> searchCachedDebates(
+    String query, {
+    int limit = 40,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const [];
+    final dates = await _db.cachedSittingDates();
+    if (dates.isEmpty) return const [];
+    final matches = <Map<String, dynamic>>[];
+    final needle = trimmed.toLowerCase();
+    for (final date in dates) {
+      final db = await _db.openSittingDb(date);
+      final rows = await db.query(
+        'debates',
+        columns: ['id', 'title', 'house', 'section', 'order_idx'],
+        where: 'LOWER(title) LIKE ?',
+        whereArgs: ['%$needle%'],
+        orderBy: 'order_idx ASC',
+      );
+      for (final row in rows) {
+        final title = (row['title'] as String?)?.trim() ?? '';
+        if (title.isEmpty) continue;
+        matches.add({
+          'debateId': row['id'],
+          'title': title,
+          'house': row['house'],
+          'section': row['section'],
+          'date': date,
+        });
+        if (matches.length >= limit) return matches;
+      }
+    }
+    return matches;
+  }
+
   Future<bool> isSittingCached(String date) => _db.sittingDbExists(date);
 
   Future<bool> hasSittingData(String date) async {
@@ -351,11 +446,27 @@ class ParliamentaryDataService {
 
   Future<int> wipeDebateCache() => _db.wipeDebateCache();
 
+  /// Deletes cached map boundary geometry (constituencies + councils).
+  Future<int> clearMapBoundaries() => _boundaryService.clearCache();
+
+  /// Deletes cached council data: the councillor list and the control table.
+  Future<int> clearCouncilData() async {
+    final councillors = await _councillorService.clearCache();
+    final control = await _councilControlService.clearCache();
+    return councillors + control;
+  }
+
+  /// Clears cached MP profiles, forcing a re-fetch on next read.
+  Future<int> clearCachedMembers() => _db.wipeMembersCache();
+
   void dispose() {
     _membersApi.dispose();
     _hansardApi.dispose();
     _liveApi.dispose();
     _billsApi.dispose();
     _boundaryService.dispose();
+    _councilControlService.dispose();
+    _councillorService.dispose();
+    _councillorEnrichmentService.dispose();
   }
 }

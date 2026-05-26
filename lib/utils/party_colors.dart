@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'council_control.dart';
 import 'party_tokens.dart';
 
 export 'party_tokens.dart' show canonicalPartyToken;
+
+/// Neutral grey used for areas with no single controlling party (no overall
+/// control) or that could not be matched to data.
+const Color noControlColor = Color(0xFF9E9E9E);
 
 /// Party brand color for a given party name or abbreviation.
 Color partyColor(String partyName, {Color? fallback}) {
@@ -21,6 +26,13 @@ Color partyColor(String partyName, {Color? fallback}) {
   if (token == 'speaker') return Colors.black;
   if (token == 'reform') return const Color(0xFF12B6CF);
   return fallback ?? const Color(0xFF6C757D);
+}
+
+/// Brand colour for a council's political control string (e.g. `"LAB"`,
+/// `"SNP/LD"`), falling back to [noControlColor] for no-overall-control.
+Color controlColor(String control) {
+  final token = councilControlToken(control);
+  return token == null ? noControlColor : partyColor(token);
 }
 
 /// Light foreground (white) or dark foreground depending on background luminance.

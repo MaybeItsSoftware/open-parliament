@@ -13,15 +13,8 @@ import '../viewmodels/bill_viewmodel.dart';
 import 'member_view.dart';
 
 /// Detail page for a single bill.
-///
-/// Shows what the bill is (long title / summary), its current status and
-/// sponsor, the latest news updates, and a timeline of its passage through
-/// Parliament. Reached by tapping a "View bill" chip on a debate.
 class BillView extends StatefulWidget {
   final String billTitle;
-
-  /// Optional pre-resolved bill id (set when opened from the recent-bills list)
-  /// so the title→id lookup can be skipped.
   final int? billId;
 
   const BillView({super.key, required this.billTitle, this.billId});
@@ -33,9 +26,6 @@ class BillView extends StatefulWidget {
 class _BillViewState extends State<BillView> {
   late BillViewModel _vm;
   final ScrollController _scrollController = ScrollController();
-  bool _titleVisible = false;
-
-  static const double _collapseThreshold = 120;
 
   @override
   void initState() {
@@ -46,19 +36,10 @@ class _BillViewState extends State<BillView> {
       billId: widget.billId,
     );
     unawaited(_vm.load());
-    _scrollController.addListener(_onScroll);
-  }
-
-  void _onScroll() {
-    final collapsed = _scrollController.offset > _collapseThreshold;
-    if (collapsed != _titleVisible) {
-      setState(() => _titleVisible = collapsed);
-    }
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _vm.dispose();
     super.dispose();
@@ -80,117 +61,62 @@ class _BillViewState extends State<BillView> {
         builder: (context, vm, _) {
           final hColor = _houseColor(vm.bill?.currentHouse);
           final fgColor = party_util.foregroundForParty(hColor);
+          final title = vm.bill?.shortTitle ?? widget.billTitle;
 
           return Scaffold(
-            body: CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                _buildAppBar(vm, hColor, fgColor),
-                if (vm.isLoading)
-                  const SliverFillRemaining(
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (vm.error != null && vm.bill == null)
-                  SliverFillRemaining(child: _buildError(vm))
-                else ...[
-                  SliverToBoxAdapter(child: _buildInfoSection(context, vm)),
-                  if (vm.bill?.sponsors.isNotEmpty == true)
-                    SliverToBoxAdapter(child: _buildSponsors(context, vm)),
-                  if (vm.news.isNotEmpty) ...[
-                    SliverToBoxAdapter(
-                      child: _sectionHeader(context, 'Latest Updates'),
+            appBar: AppBar(
+              backgroundColor: hColor,
+              foregroundColor: fgColor,
+              iconTheme: IconThemeData(color: fgColor),
+              title: Row(
+                children: [
+                  const Icon(Icons.article_outlined),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, i) => _buildNewsTile(context, vm.news[i]),
-                        childCount: vm.news.length,
-                      ),
-                    ),
-                  ],
-                  if (vm.stages.isNotEmpty) ...[
-                    SliverToBoxAdapter(
-                      child: _sectionHeader(context, 'Progress'),
-                    ),
-                    SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, i) => _buildStageTile(
-                          context,
-                          vm.stages[i],
-                          hColor,
-                          isLast: i == vm.stages.length - 1,
-                        ),
-                        childCount: vm.stages.length,
-                      ),
-                    ),
-                  ],
-                  if (vm.billPageUrl != null)
-                    SliverToBoxAdapter(child: _buildExternalLink(context, vm)),
-                  const SliverToBoxAdapter(child: SizedBox(height: 40)),
+                  ),
                 ],
-              ],
+              ),
             ),
+            body: vm.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : vm.error != null && vm.bill == null
+                    ? _buildError(vm)
+                    : ListView(
+                        controller: _scrollController,
+                        children: [
+                          _buildInfoSection(context, vm),
+                          if (vm.bill?.sponsors.isNotEmpty == true)
+                            _buildSponsors(context, vm),
+                          if (vm.news.isNotEmpty) ...[
+                            _sectionHeader(context, 'Latest Updates'),
+                            ...vm.news.map((n) => _buildNewsTile(context, n)),
+                          ],
+                          if (vm.stages.isNotEmpty) ...[
+                            _sectionHeader(context, 'Progress'),
+                            ...vm.stages.asMap().entries.map(
+                                  (e) => _buildStageTile(
+                                    context,
+                                    e.value,
+                                    hColor,
+                                    isLast: e.key == vm.stages.length - 1,
+                                  ),
+                                ),
+                          ],
+                          if (vm.billPageUrl != null)
+                            _buildExternalLink(context, vm),
+                          const SizedBox(height: 40),
+                        ],
+                      ),
           );
         },
       ),
     );
   }
-
-  // ─── App bar ────────────────────────────────────────────────────────────
-
-  SliverAppBar _buildAppBar(BillViewModel vm, Color hColor, Color fgColor) {
-    final title = vm.bill?.shortTitle ?? widget.billTitle;
-    return SliverAppBar(
-      expandedHeight: 150,
-      pinned: true,
-      backgroundColor: hColor,
-      iconTheme: IconThemeData(color: fgColor),
-      flexibleSpace: FlexibleSpaceBar(
-        collapseMode: CollapseMode.pin,
-        background: Container(
-          color: hColor,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.gavel, color: fgColor.withValues(alpha: 0.9)),
-                  const SizedBox(height: 10),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: fgColor,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      title: AnimatedOpacity(
-        opacity: _titleVisible ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 150),
-        child: Text(
-          title,
-          style: TextStyle(
-            color: fgColor,
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    );
-  }
-
-  // ─── Info section ─────────────────────────────────────────────────────────
 
   Widget _buildInfoSection(BuildContext context, BillViewModel vm) {
     final theme = Theme.of(context);
@@ -278,8 +204,6 @@ class _BillViewState extends State<BillView> {
     );
   }
 
-  // ─── Sponsors ─────────────────────────────────────────────────────────────
-
   Widget _buildSponsors(BuildContext context, BillViewModel vm) {
     final theme = Theme.of(context);
     return Padding(
@@ -358,8 +282,6 @@ class _BillViewState extends State<BillView> {
     );
   }
 
-  // ─── News updates ─────────────────────────────────────────────────────────
-
   Widget _buildNewsTile(BuildContext context, BillNews news) {
     final theme = Theme.of(context);
     return Padding(
@@ -392,8 +314,6 @@ class _BillViewState extends State<BillView> {
       ),
     );
   }
-
-  // ─── Stage timeline ─────────────────────────────────────────────────────
 
   Widget _buildStageTile(
     BuildContext context,
@@ -474,8 +394,6 @@ class _BillViewState extends State<BillView> {
     );
   }
 
-  // ─── External link ────────────────────────────────────────────────────────
-
   Widget _buildExternalLink(BuildContext context, BillViewModel vm) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -488,8 +406,6 @@ class _BillViewState extends State<BillView> {
       ),
     );
   }
-
-  // ─── Error state ──────────────────────────────────────────────────────────
 
   Widget _buildError(BillViewModel vm) {
     return Center(
@@ -516,8 +432,6 @@ class _BillViewState extends State<BillView> {
     );
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
   Widget _sectionHeader(BuildContext context, String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
@@ -532,7 +446,6 @@ class _BillViewState extends State<BillView> {
   }
 
   void _openMember(BuildContext context, BillSponsor sponsor) {
-    // MemberView re-fetches full detail by id, so a lightweight stub is enough.
     final member = Member(
       id: sponsor.memberId!,
       name: sponsor.name,

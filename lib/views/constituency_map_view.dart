@@ -1,17 +1,24 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
-import '../models/boundary.dart';
+import '../models/council.dart';
 import '../services/parliamentary_data_service.dart';
+import '../utils/area_match.dart';
+import '../utils/council_control.dart';
 import '../utils/map_tiles.dart';
+import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/constituency_map_viewmodel.dart';
 import 'app_drawer.dart';
+import 'council_view.dart';
+import 'member_view.dart';
 
-/// National map view for constituency or council control.
+/// National map showing political control: constituencies coloured by the
+/// sitting MP's party, councils by their controlling party.
 class ConstituencyMapView extends StatefulWidget {
   const ConstituencyMapView({super.key});
 
@@ -19,11 +26,46 @@ class ConstituencyMapView extends StatefulWidget {
   State<ConstituencyMapView> createState() => _ConstituencyMapViewState();
 }
 
-class _ConstituencyMapViewState extends State<ConstituencyMapView> {
+class _ConstituencyMapViewState extends State<ConstituencyMapView>
+    with SingleTickerProviderStateMixin {
   static const LatLng _ukCenter = LatLng(54.6, -3.4);
   static const double _initialZoom = 5.3;
+  static final LatLngBounds _ukBounds = LatLngBounds.fromPoints(
+    const [
+      LatLng(49.6, -8.9),
+      LatLng(61.0, 2.3),
+    ],
+  );
 
   late ConstituencyMapViewModel _vm;
+  final MapController _mapController = MapController();
+
+  // Drives smooth camera flights between the current and target view.
+  late final AnimationController _flight = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  );
+  LatLng _flightFromCenter = _ukCenter;
+  LatLng _flightToCenter = _ukCenter;
+  double _flightFromZoom = _initialZoom;
+  double _flightToZoom = _initialZoom;
+
+  /// The area whose drawer is currently open, or null when none is.
+  MapArea? _selected;
+
+  /// The last non-null selection, kept so the drawer keeps showing its content
+  /// while it slides back down after being dismissed.
+  MapArea? _lastArea;
+
+  /// True while the camera is actively moving. We render coarser polygons in
+  /// this state for smooth panning, then snap back to full detail once the map
+  /// settles — so accuracy is only ever traded transiently, never at rest.
+  bool _interacting = false;
+  StreamSubscription<MapEvent>? _mapEventSub;
+  Timer? _settleTimer;
+
+  /// How long after the last camera event we consider movement finished.
+  static const Duration _settleDelay = Duration(milliseconds: 200);
 
   @override
   void initState() {
@@ -32,12 +74,109 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
       context.read<ParliamentaryDataService>(),
     );
     unawaited(_vm.load(MapMode.constituency));
+
+    // Any camera event means the map is moving; debounce back to "settled".
+    _mapEventSub = _mapController.mapEventStream.listen((_) => _markMoving());
+
+    _flight.addListener(() {
+      final t = Curves.easeInOutCubic.transform(_flight.value);
+      _mapController.move(
+        LatLng(
+          _flightFromCenter.latitude +
+              (_flightToCenter.latitude - _flightFromCenter.latitude) * t,
+          _flightFromCenter.longitude +
+              (_flightToCenter.longitude - _flightFromCenter.longitude) * t,
+        ),
+        _flightFromZoom + (_flightToZoom - _flightFromZoom) * t,
+      );
+    });
+  }
+
+  /// Smoothly flies the camera from its current view to [center]/[zoom].
+  void _flyTo(LatLng center, double zoom) {
+    final cam = _mapController.camera;
+    _flightFromCenter = cam.center;
+    _flightFromZoom = cam.zoom;
+    _flightToCenter = center;
+    _flightToZoom = zoom;
+    _flight.forward(from: 0);
+  }
+
+  /// Resets the map to point north without changing position or zoom.
+  void _reorient() {
+    _mapController.rotate(0);
+  }
+
+  /// Flags the camera as moving and (re)arms the settle timer. Rebuilds only on
+  /// the leading edge and after settling, so the stream of move events while
+  /// dragging doesn't churn setState.
+  void _markMoving() {
+    _settleTimer?.cancel();
+    if (!_interacting) setState(() => _interacting = true);
+    _settleTimer = Timer(_settleDelay, () {
+      if (mounted && _interacting) setState(() => _interacting = false);
+    });
   }
 
   @override
   void dispose() {
+    _settleTimer?.cancel();
+    _mapEventSub?.cancel();
+    _flight.dispose();
     _vm.dispose();
     super.dispose();
+  }
+
+  void _openCouncil(MapArea area) {
+    final council = area.council;
+    if (council == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CouncilView(
+          council: council,
+          boundaries: _vm.polygonsForName(area.name),
+          councillors: _vm.councillorsForCouncil(council.name),
+        ),
+      ),
+    );
+  }
+
+  void _openMp(MapArea area) {
+    final member = area.member;
+    if (member == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => MemberView(member: member)),
+    );
+  }
+
+  void _handleTap(LatLng point) {
+    // Topmost match wins; areas are small so a linear scan is fine.
+    MapArea? hit;
+    for (final area in _vm.areas) {
+      if (boundaryContainsPoint(area.polygon, point)) {
+        hit = area;
+        break;
+      }
+    }
+    setState(() {
+      _selected = hit;
+      if (hit != null) _lastArea = hit;
+    });
+    if (hit != null) _zoomToArea(hit);
+  }
+
+  /// Frames the camera on every polygon belonging to [area] (a council can
+  /// span several islands). Extra bottom padding keeps it clear of the drawer.
+  void _zoomToArea(MapArea area) {
+    final points = [
+      for (final polygon in _vm.polygonsForName(area.name)) ...polygon.outer,
+    ];
+    if (points.isEmpty) return;
+    final target = CameraFit.bounds(
+      bounds: LatLngBounds.fromPoints(points),
+      padding: const EdgeInsets.fromLTRB(48, 48, 48, 280),
+    ).fit(_mapController.camera);
+    _flyTo(target.center, target.zoom);
   }
 
   @override
@@ -47,17 +186,10 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
       child: Consumer<ConstituencyMapViewModel>(
         builder: (context, vm, _) {
           final theme = Theme.of(context);
-          final accent = vm.mode == MapMode.council
-              ? theme.colorScheme.tertiary
-              : theme.colorScheme.primary;
-          final polygons = _toPolygons(
-            vm.boundaries,
-            fill: accent.withValues(alpha: 0.08),
-            stroke: accent.withValues(alpha: 0.85),
-          );
+          final polygons = _toPolygons(vm.areas, _selected?.name);
           return Scaffold(
             appBar: AppBar(
-              title: const Text('Constituency Map'),
+              title: const Text('Control Map'),
               bottom: PreferredSize(
                 preferredSize: const Size.fromHeight(56),
                 child: Padding(
@@ -79,6 +211,7 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
                     showSelectedIcon: false,
                     onSelectionChanged: (selection) {
                       if (selection.isEmpty) return;
+                      setState(() => _selected = null);
                       unawaited(_vm.load(selection.first));
                     },
                   ),
@@ -89,18 +222,38 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
             body: Stack(
               children: [
                 FlutterMap(
-                  options: const MapOptions(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
                     initialCenter: _ukCenter,
                     initialZoom: _initialZoom,
                     minZoom: 4,
                     maxZoom: 18,
+                    // containCenter (not contain): the UK box is smaller than
+                    // the viewport at these zooms, so `contain` is unsatisfiable
+                    // and trips flutter_map's constraint assertion on rebuild.
+                    // Keeping the centre in-bounds stops the map drifting away
+                    // while staying always-satisfiable.
+                    cameraConstraint:
+                        CameraConstraint.containCenter(bounds: _ukBounds),
+                    onTap: (_, point) => _handleTap(point),
                   ),
                   children: [
-                    buildCartoLightTileLayer(),
+                    buildCartoBaseTileLayer(context),
                     if (polygons.isNotEmpty)
                       PolygonLayer(
                         polygons: polygons,
+                        polygonCulling: true,
+                        // Coarsen heavily only while the camera is moving, where
+                        // the vertex-dense council set (~7.5 MB) otherwise makes
+                        // panning janky; motion hides the lower fidelity. At rest
+                        // we drop back to a near-lossless 0.5 px so the static and
+                        // zoomed-in map keeps full polygon accuracy. (Tolerance is
+                        // render-only — tap hit-testing always uses exact points.)
+                        simplificationTolerance: _interacting ? 8 : 0.5,
                       ),
+                    // Labels sit above the fills so place names stay legible.
+                    buildCartoLabelsTileLayer(context),
                   ],
                 ),
                 if (vm.isLoading && polygons.isEmpty)
@@ -119,6 +272,48 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
                       ),
                     ),
                   ),
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: _CompassButton(
+                    controller: _mapController,
+                    onTap: _reorient,
+                  ),
+                ),
+                if (!vm.isLoading && vm.error == null)
+                  Positioned(
+                    left: 12,
+                    bottom: 12,
+                    child: _Legend(mode: vm.mode),
+                  ),
+                // A single, stable drawer subtree that slides in/out. Keeping
+                // one subtree (rather than swapping with AnimatedSwitcher)
+                // avoids hit-testing a child mid-layout while it animates.
+                if (_lastArea != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      ignoring: _selected == null,
+                      child: AnimatedSlide(
+                        duration: const Duration(milliseconds: 260),
+                        curve: Curves.easeOutCubic,
+                        offset:
+                            _selected == null ? const Offset(0, 1) : Offset.zero,
+                        child: _AreaDrawer(
+                          area: _selected ?? _lastArea!,
+                          onClose: () => setState(() => _selected = null),
+                          onOpenCouncil: (_selected ?? _lastArea!).council == null
+                              ? null
+                              : () => _openCouncil(_selected ?? _lastArea!),
+                          onOpenMp: (_selected ?? _lastArea!).member == null
+                              ? null
+                              : () => _openMp(_selected ?? _lastArea!),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           );
@@ -128,19 +323,410 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView> {
   }
 }
 
-List<Polygon> _toPolygons(
-  List<BoundaryPolygon> boundaries, {
-  required Color fill,
-  required Color stroke,
-}) {
-  return [
-    for (final boundary in boundaries)
-      Polygon(
-        points: boundary.outer,
-        holePointsList: boundary.holes.isNotEmpty ? boundary.holes : null,
-        color: fill,
-        borderColor: stroke,
-        borderStrokeWidth: 1,
+List<Polygon> _toPolygons(List<MapArea> areas, String? selectedName) {
+  // The selected area is drawn last (on top) with a bolder, fuller style.
+  final base = <Polygon>[];
+  final selected = <Polygon>[];
+  for (final area in areas) {
+    final isSelected = selectedName != null && area.name == selectedName;
+    final polygon = Polygon(
+      points: area.polygon.outer,
+      holePointsList:
+          area.polygon.holes.isNotEmpty ? area.polygon.holes : null,
+      color: isSelected ? area.border.withValues(alpha: 0.45) : area.fill,
+      borderColor: isSelected
+          ? area.border
+          : area.border.withValues(alpha: 0.85),
+      borderStrokeWidth: isSelected ? 2.5 : 0.6,
+      disableHolesBorder: true,
+    );
+    (isSelected ? selected : base).add(polygon);
+  }
+  return [...base, ...selected];
+}
+
+/// A small compass whose needle tracks the map's bearing; tap to reset north
+/// and recentre on the UK.
+class _CompassButton extends StatefulWidget {
+  final MapController controller;
+  final VoidCallback onTap;
+
+  const _CompassButton({required this.controller, required this.onTap});
+
+  @override
+  State<_CompassButton> createState() => _CompassButtonState();
+}
+
+class _CompassButtonState extends State<_CompassButton> {
+  StreamSubscription<MapEvent>? _sub;
+  double _rotation = 0; // map bearing in degrees
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.controller.mapEventStream.listen((_) {
+      final r = widget.controller.camera.rotation;
+      if (r == _rotation) return;
+      // Defer: map events fire during layout/pointer handling, and calling
+      // setState then trips the mouse_tracker's `!_debugDuringDeviceUpdate`
+      // assertion. A post-frame callback rebuilds safely after the update.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _rotation = r);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      elevation: 3,
+      shape: const CircleBorder(),
+      color: theme.colorScheme.surface,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Transform.rotate(
+            // Counter-rotate so the needle keeps pointing at true north.
+            angle: -_rotation * math.pi / 180,
+            child: Icon(
+              Icons.navigation,
+              size: 22,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+        ),
       ),
+    );
+  }
+}
+
+/// Bottom drawer that slides up to detail the tapped area: who controls it,
+/// and — for councils — the seat composition plus a link to the full page.
+class _AreaDrawer extends StatelessWidget {
+  final MapArea area;
+  final VoidCallback onClose;
+
+  /// Opens the council detail page; null when the area has no page (e.g. a
+  /// constituency).
+  final VoidCallback? onOpenCouncil;
+
+  /// Opens the sitting MP's page; null when the area has no MP (a council, or a
+  /// constituency with a vacant seat).
+  final VoidCallback? onOpenMp;
+
+  const _AreaDrawer({
+    required this.area,
+    required this.onClose,
+    this.onOpenCouncil,
+    this.onOpenMp,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final council = area.council;
+    final controller = council != null
+        ? controlDisplayName(council.control)
+        : area.controller;
+
+    return Material(
+      elevation: 8,
+      color: theme.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        top: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.5,
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 12, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 14,
+                        height: 14,
+                        margin: const EdgeInsets.only(top: 4, right: 12),
+                        decoration: BoxDecoration(
+                          color: area.border,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              area.name.isNotEmpty ? area.name : 'Unknown area',
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              controller,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        iconSize: 20,
+                        onPressed: onClose,
+                      ),
+                    ],
+                  ),
+                  if (council != null) ...[
+                    const SizedBox(height: 12),
+                    _CouncilSummary(council: council),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.tonalIcon(
+                        onPressed: onOpenCouncil,
+                        icon: const Icon(Icons.open_in_new, size: 18),
+                        label: const Text('Full details'),
+                      ),
+                    ),
+                  ],
+                  if (onOpenMp != null) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.tonalIcon(
+                        onPressed: onOpenMp,
+                        icon: const Icon(Icons.person_outline, size: 18),
+                        label: const Text('MP details'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact seat breakdown for a council, shown inside the drawer.
+class _CouncilSummary extends StatelessWidget {
+  final Council council;
+  const _CouncilSummary({required this.council});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final held = council.heldSeats;
+    final vacant = council.seats.entries
+        .where((e) => e.key.toLowerCase() == 'vacant')
+        .fold<int>(0, (sum, e) => sum + e.value);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.account_balance_outlined,
+                size: 16, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text(
+              council.type.isNotEmpty ? council.type : 'Local authority',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(width: 16),
+            Icon(Icons.event_seat_outlined,
+                size: 16, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text(
+              '${council.total} seats',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+        if (council.total > 0) ...[
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(
+              height: 14,
+              child: Row(
+                children: [
+                  for (final e in held)
+                    Expanded(
+                      flex: e.value,
+                      child: ColoredBox(color: party_util.partyColor(e.key)),
+                    ),
+                  if (vacant > 0)
+                    Expanded(
+                      flex: vacant,
+                      child: const ColoredBox(color: party_util.noControlColor),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 14,
+            runSpacing: 4,
+            children: [
+              for (final e in held)
+                _SeatChip(
+                  label: e.key,
+                  seats: e.value,
+                  color: party_util.partyColor(e.key),
+                ),
+              if (vacant > 0)
+                _SeatChip(
+                  label: 'Vacant',
+                  seats: vacant,
+                  color: party_util.noControlColor,
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// One party's colour swatch, name and seat count in the drawer breakdown.
+class _SeatChip extends StatelessWidget {
+  final String label;
+  final int seats;
+  final Color color;
+
+  const _SeatChip({
+    required this.label,
+    required this.seats,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          margin: const EdgeInsets.only(right: 6),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        Text('$label ', style: theme.textTheme.bodySmall),
+        Text(
+          '$seats',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+/// Compact legend of the parties shown on the current map.
+class _Legend extends StatelessWidget {
+  final MapMode mode;
+  const _Legend({required this.mode});
+
+  // The parties worth labelling; minor/local parties fall back to grey.
+  static const List<(String, String)> _entries = [
+    ('Labour', 'Lab'),
+    ('Conservative', 'Con'),
+    ('Lib Dem', 'LD'),
+    ('SNP', 'SNP'),
+    ('Green', 'Green'),
+    ('Reform', 'Reform'),
+    ('Plaid Cymru', 'Plaid Cymru'),
   ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final (label, token) in _entries)
+              _LegendRow(label: label, color: party_util.partyColor(token)),
+            _LegendRow(
+              label: mode == MapMode.council ? 'No overall control' : 'Other',
+              color: party_util.noControlColor,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LegendRow extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _LegendRow({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 12,
+            height: 12,
+            margin: const EdgeInsets.only(right: 6),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+        ],
+      ),
+    );
+  }
 }

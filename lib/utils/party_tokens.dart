@@ -21,6 +21,7 @@ String? canonicalPartyToken(String value) {
   if (norm == 'con' ||
       norm == 'conservative' ||
       norm == 'conservativeparty' ||
+      norm == 'conservativeandunionist' ||
       norm == 'conservativeandunionistparty') {
     return 'conservative';
   }
@@ -32,8 +33,12 @@ String? canonicalPartyToken(String value) {
     return 'libdem';
   }
   if (norm == 'snp' || norm == 'scottishnationalparty') return 'snp';
-  if (norm == 'green' || raw.contains('green party')) return 'green';
-  if (norm == 'plaidcymru') return 'plaidcymru';
+  if (norm == 'green' || norm == 'grn' || raw.contains('green party')) {
+    return 'green';
+  }
+  if (norm == 'plaidcymru' || norm == 'plaid' || norm == 'pc') {
+    return 'plaidcymru';
+  }
   if (norm == 'sinnfein') return 'sinnfein';
   if (norm == 'dup' || norm == 'democraticunionistparty') return 'dup';
   if (norm == 'uup' || norm == 'ulsterunionistparty') return 'uup';
@@ -45,6 +50,6 @@ String? canonicalPartyToken(String value) {
     return 'independent';
   }
   if (norm == 'speaker') return 'speaker';
-  if (norm == 'reform' || norm == 'reformuk') return 'reform';
+  if (norm == 'reform' || norm == 'reformuk' || norm == 'ref') return 'reform';
   return null;
 }
