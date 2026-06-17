@@ -124,6 +124,47 @@ class _BillViewState extends State<BillView> {
     final description = (bill?.summary?.trim().isNotEmpty == true)
         ? bill!.summary!.trim()
         : (bill?.longTitle ?? '');
+    final detailRows = <Widget>[];
+
+    if (bill?.originatingHouse.isNotEmpty == true) {
+      detailRows.add(
+        _detailRow(
+          context,
+          Icons.flag_outlined,
+          'Originating house',
+          bill!.originatingHouse,
+        ),
+      );
+    }
+
+    final billType = vm.billType;
+    if (billType != null) {
+      final value = [
+        if (billType.category.isNotEmpty) billType.category,
+        if (billType.name.isNotEmpty) billType.name,
+      ].join(' · ');
+      if (value.isNotEmpty) {
+        detailRows.add(
+          _detailRow(
+            context,
+            Icons.local_offer_outlined,
+            'Bill type',
+            value,
+          ),
+        );
+      }
+    }
+
+    if (bill?.formerShortTitle?.trim().isNotEmpty == true) {
+      detailRows.add(
+        _detailRow(
+          context,
+          Icons.history,
+          'Former title',
+          bill!.formerShortTitle!.trim(),
+        ),
+      );
+    }
 
     final (statusLabel, statusColor) = switch (bill?.status) {
       BillStatus.act => ('Royal Assent — now an Act', HouseColors.commons),
@@ -155,6 +196,13 @@ class _BillViewState extends State<BillView> {
           if (description.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(description, style: theme.textTheme.bodyMedium),
+          ],
+          if (detailRows.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            for (var i = 0; i < detailRows.length; i++) ...[
+              detailRows[i],
+              if (i != detailRows.length - 1) const SizedBox(height: 6),
+            ],
           ],
           if (vm.bill?.lastUpdate != null) ...[
             const SizedBox(height: 12),
@@ -201,6 +249,34 @@ class _BillViewState extends State<BillView> {
           fontWeight: FontWeight.w600,
         ),
       ),
+    );
+  }
+
+  Widget _detailRow(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String value,
+  ) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          icon,
+          size: 16,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            '$label: $value',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

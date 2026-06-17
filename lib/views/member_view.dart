@@ -11,6 +11,7 @@ import '../services/parliamentary_data_service.dart';
 import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/member_viewmodel.dart';
+import 'bill_view.dart';
 import 'transcript_view.dart';
 import 'party_view.dart';
 
@@ -610,7 +611,7 @@ class _MemberViewState extends State<MemberView> {
           final row = rows[i];
           return switch (row) {
             _VoteHeaderRow(:final group) =>
-              _buildVoteGroupHeader(context, group),
+            _buildVoteGroupHeader(context, vm, group),
             _VoteEntryRow(:final vote, :final isLast) =>
               _buildVoteRow(context, vote, showDivider: !isLast),
           };
@@ -620,44 +621,60 @@ class _MemberViewState extends State<MemberView> {
     );
   }
 
-  Widget _buildVoteGroupHeader(BuildContext context, VoteGroup group) {
+  Widget _buildVoteGroupHeader(
+    BuildContext context,
+    MemberViewModel vm,
+    VoteGroup group,
+  ) {
     final theme = Theme.of(context);
     final collapsed = _collapsedVoteGroups.contains(group.title);
     final count = group.votes.length;
 
-    return InkWell(
-      onTap: () => setState(() {
-        // Toggle: remove returns false if it wasn't present, so add it.
-        if (!_collapsedVoteGroups.remove(group.title)) {
-          _collapsedVoteGroups.add(group.title);
-        }
-      }),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 16, 8),
-        child: Row(
-          children: [
-            Icon(
-              collapsed ? Icons.chevron_right : Icons.expand_more,
-              size: 22,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                group.title,
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => setState(() {
+                // Toggle: remove returns false if it wasn't present, so add it.
+                if (!_collapsedVoteGroups.remove(group.title)) {
+                  _collapsedVoteGroups.add(group.title);
+                }
+              }),
+              child: Row(
+                children: [
+                  Icon(
+                    collapsed ? Icons.chevron_right : Icons.expand_more,
+                    size: 22,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      group.title,
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$count division${count == 1 ? '' : 's'}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              '$count division${count == 1 ? '' : 's'}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
+          ),
+          IconButton(
+            onPressed: () => unawaited(_openBillForVoteGroup(context, vm, group)),
+            icon: const Icon(Icons.article_outlined),
+            tooltip: 'Open bill',
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
       ),
     );
   }
@@ -789,6 +806,26 @@ class _MemberViewState extends State<MemberView> {
           date: dateStr,
           displayDate: _formatDate(date),
         ),
+      ),
+    );
+  }
+
+  Future<void> _openBillForVoteGroup(
+    BuildContext context,
+    MemberViewModel vm,
+    VoteGroup group,
+  ) async {
+    final id = await vm.findBillIdForVoteGroup(group.title);
+    if (!context.mounted) return;
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No matching bill found.')),
+      );
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BillView(billTitle: group.title, billId: id),
       ),
     );
   }

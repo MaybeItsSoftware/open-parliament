@@ -45,6 +45,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
       const [];
 
   @override
+  Future<List<Map<String, dynamic>>> fetchBillTypes() async => const [];
+
+  @override
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async => null;
 
   @override

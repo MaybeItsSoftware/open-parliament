@@ -124,6 +124,9 @@ class ParliamentaryDataService {
   }) =>
       _billsApi.searchBills(query, take: take);
 
+  Future<List<Map<String, dynamic>>> fetchBillTypes() =>
+      _billsApi.fetchBillTypes();
+
   Future<Map<String, dynamic>?> fetchBillDetail(int id) =>
       _billsApi.fetchBillDetail(id);
 

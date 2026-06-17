@@ -14,6 +14,7 @@ import 'package:open_hansard/viewmodels/bill_viewmodel.dart';
 import 'package:open_hansard/viewmodels/bills_list_viewmodel.dart';
 import 'package:open_hansard/viewmodels/constituency_map_viewmodel.dart';
 import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
+import 'package:open_hansard/viewmodels/house_seating_viewmodel.dart';
 import 'package:open_hansard/viewmodels/member_viewmodel.dart';
 import 'package:open_hansard/viewmodels/search_viewmodel.dart';
 import 'package:open_hansard/viewmodels/transcript_viewmodel.dart';
@@ -64,6 +65,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
     int take = 20,
   }) async =>
       searchBillsResult;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchBillTypes() async => const [];
 
   @override
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async =>
@@ -1261,6 +1265,73 @@ void main() {
       expect(vm.results.debates, hasLength(1));
       expect(vm.results.councillors, hasLength(1));
       expect(vm.results.councillors.first.council, isNotNull);
+    });
+  });
+
+  group('HouseSeatingViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+    late HouseSeatingViewModel vm;
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService();
+      vm = HouseSeatingViewModel(fakeService);
+    });
+
+    tearDown(() => vm.dispose());
+
+    test('load filters members by house and builds breakdown', () async {
+      fakeService.membersResult = const [
+        Member(
+          id: 1,
+          name: 'Alice',
+          party: 'Labour',
+          partyAbbreviation: 'Lab',
+          constituency: 'Cambridge',
+        ),
+        Member(
+          id: 2,
+          name: 'Bob',
+          party: 'Conservative',
+          partyAbbreviation: 'Con',
+          constituency: 'York',
+        ),
+        Member(
+          id: 3,
+          name: 'Lord Example',
+          party: 'Crossbench',
+          partyAbbreviation: '',
+        ),
+      ];
+
+      await vm.load(HouseType.commons);
+
+      expect(vm.seats, hasLength(2));
+      expect(vm.totalMembers, 2);
+      expect(vm.breakdown, hasLength(2));
+
+      await vm.load(HouseType.lords);
+
+      expect(vm.seats, hasLength(1));
+      expect(vm.totalMembers, 1);
+      expect(vm.breakdown.single.label, 'Crossbench');
+    });
+
+    test('seats include normalized positions', () async {
+      fakeService.membersResult = const [
+        Member(
+          id: 1,
+          name: 'Alice',
+          party: 'Labour',
+          partyAbbreviation: 'Lab',
+          constituency: 'Cambridge',
+        ),
+      ];
+
+      await vm.load(HouseType.commons);
+
+      final seat = vm.seats.single;
+      expect(seat.position.dx, inInclusiveRange(0.0, 1.0));
+      expect(seat.position.dy, inInclusiveRange(0.0, 1.0));
     });
   });
 }

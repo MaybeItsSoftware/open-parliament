@@ -135,6 +135,7 @@ class MemberViewModel extends ChangeNotifier {
   List<BiographyPost> _governmentPosts = const [];
   List<BiographyPost> _oppositionPosts = const [];
   final List<MemberVote> _votes = [];
+  final Map<String, int?> _voteGroupBillIds = {};
 
   // Voting history is paged (20 per API page, 1-indexed) and loaded lazily as
   // the profile is scrolled.
@@ -179,6 +180,16 @@ class MemberViewModel extends ChangeNotifier {
     return [
       for (final key in order) VoteGroup(title: key, votes: byKey[key]!),
     ];
+  }
+
+  /// Resolves the bill id (if any) for a vote-group title, caching results.
+  Future<int?> findBillIdForVoteGroup(String title) async {
+    final key = title.trim();
+    if (key.isEmpty) return null;
+    if (_voteGroupBillIds.containsKey(key)) return _voteGroupBillIds[key];
+    final id = await _service.findBillId(key);
+    _voteGroupBillIds[key] = id;
+    return id;
   }
 
   Future<void> load() async {

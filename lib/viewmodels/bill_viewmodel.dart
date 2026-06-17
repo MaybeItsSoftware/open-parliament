@@ -110,6 +110,30 @@ class BillNews {
   }
 }
 
+/// The canonical type/category for a bill (e.g. Government Bill, Private Bill).
+class BillType {
+  final int id;
+  final String category;
+  final String name;
+  final String description;
+
+  const BillType({
+    required this.id,
+    required this.category,
+    required this.name,
+    required this.description,
+  });
+
+  factory BillType.fromJson(Map<String, dynamic> json) {
+    return BillType(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      category: (json['category'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
+      description: (json['description'] as String?) ?? '',
+    );
+  }
+}
+
 /// The status of a bill's progress through Parliament.
 enum BillStatus { inProgress, act, defeated, withdrawn }
 
@@ -125,6 +149,8 @@ class Bill {
   final DateTime? lastUpdate;
   final BillStatus status;
   final List<BillSponsor> sponsors;
+  final int? billTypeId;
+  final String? formerShortTitle;
 
   const Bill({
     required this.id,
@@ -137,6 +163,8 @@ class Bill {
     this.summary,
     this.currentStageDescription,
     this.lastUpdate,
+    this.billTypeId,
+    this.formerShortTitle,
   });
 
   factory Bill.fromJson(Map<String, dynamic> json) {
@@ -171,6 +199,8 @@ class Bill {
       lastUpdate: lastRaw != null ? DateTime.tryParse(lastRaw) : null,
       status: status,
       sponsors: sponsors,
+      billTypeId: (json['billTypeId'] as num?)?.toInt(),
+      formerShortTitle: json['formerShortTitle'] as String?,
     );
   }
 }
@@ -188,6 +218,7 @@ class BillViewModel extends ChangeNotifier {
   String? _error;
   int? _billId;
   Bill? _bill;
+  BillType? _billType;
   List<BillStage> _stages = const [];
   List<BillNews> _news = const [];
 
@@ -200,6 +231,7 @@ class BillViewModel extends ChangeNotifier {
   String? get error => _error;
   int? get billId => _billId;
   Bill? get bill => _bill;
+  BillType? get billType => _billType;
 
   /// Stage history, most recent first.
   List<BillStage> get stages => _stages;
@@ -229,12 +261,15 @@ class BillViewModel extends ChangeNotifier {
       final detailFuture = _service.fetchBillDetail(id);
       final stagesFuture = _service.fetchBillStages(id);
       final newsFuture = _service.fetchBillNews(id);
+      final typesFuture = _service.fetchBillTypes();
 
       final detail = await detailFuture;
       final rawStages = await stagesFuture;
       final rawNews = await newsFuture;
+      final rawTypes = await typesFuture;
 
       if (detail != null) _bill = Bill.fromJson(detail);
+      _billType = _resolveBillType(rawTypes, _bill?.billTypeId);
 
       final currentStageId =
           (detail?['currentStage'] as Map<String, dynamic>?)?['id'] as int?;
@@ -277,6 +312,22 @@ class BillViewModel extends ChangeNotifier {
 
   void _safeNotify() {
     if (!_disposed) notifyListeners();
+  }
+
+  BillType? _resolveBillType(
+    List<Map<String, dynamic>> rawTypes,
+    int? billTypeId,
+  ) {
+    if (billTypeId == null) return null;
+    for (final json in rawTypes) {
+      try {
+        final type = BillType.fromJson(json);
+        if (type.id == billTypeId) return type;
+      } catch (_) {
+        // Skip malformed bill type entries.
+      }
+    }
+    return null;
   }
 
   @override

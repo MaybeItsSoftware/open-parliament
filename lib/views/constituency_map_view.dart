@@ -244,13 +244,12 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                       PolygonLayer(
                         polygons: polygons,
                         polygonCulling: true,
-                        // Coarsen heavily only while the camera is moving, where
-                        // the vertex-dense council set (~7.5 MB) otherwise makes
-                        // panning janky; motion hides the lower fidelity. At rest
-                        // we drop back to a near-lossless 0.5 px so the static and
+                        // Lightly simplify while moving to keep panning smooth
+                        // without visibly degrading edge quality. At rest we drop
+                        // back to a near-lossless 0.5 px so the static and
                         // zoomed-in map keeps full polygon accuracy. (Tolerance is
                         // render-only — tap hit-testing always uses exact points.)
-                        simplificationTolerance: _interacting ? 8 : 0.5,
+                        simplificationTolerance: _interacting ? 1.5 : 0.5,
                       ),
                     // Labels sit above the fills so place names stay legible.
                     buildCartoLabelsTileLayer(context),

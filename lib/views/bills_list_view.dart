@@ -8,7 +8,6 @@ import '../utils/house_colors.dart';
 import '../viewmodels/bills_list_viewmodel.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
-import 'date_selector_view.dart';
 
 /// Main view listing the most recently updated bills before Parliament.
 class BillsListView extends StatefulWidget {

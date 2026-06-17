@@ -666,6 +666,7 @@ class BillsApiService {
 
   final http.Client _client;
   final Map<String, int?> _cache = {};
+  List<Map<String, dynamic>>? _billTypesCache;
 
   BillsApiService({http.Client? client}) : _client = client ?? http.Client();
 
@@ -730,6 +731,29 @@ class BillsApiService {
     final items = (body is Map<String, dynamic>) ? body['items'] : null;
     if (items is! List) return const [];
     return items.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// Fetches the list of bill types (e.g. Government Bill, Private Bill).
+  Future<List<Map<String, dynamic>>> fetchBillTypes() async {
+    final cached = _billTypesCache;
+    if (cached != null) return cached;
+
+    final uri = Uri.parse('https://bills-api.parliament.uk/api/v1/BillTypes');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List) return const [];
+      final list = items.whereType<Map<String, dynamic>>().toList();
+      _billTypesCache = list;
+      return list;
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Fetches the most recently updated bills, newest first. Empty on failure.

@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import 'bills_list_view.dart';
 import 'constituency_map_view.dart';
 import 'date_selector_view.dart';
+import 'house_seating_view.dart';
 import 'saved_speeches_view.dart';
 import 'search_view.dart';
 import 'settings_view.dart';
 
 /// The top-level sections reachable from the navigation drawer.
-enum AppDestination { debates, search, bills, map, saved }
+enum AppDestination { debates, search, bills, map, seating, saved }
 
 /// Shared navigation drawer for the app's main views.
 ///
@@ -78,6 +79,12 @@ class AppDrawer extends StatelessWidget {
             ),
             _tile(
               context,
+              icon: Icons.event_seat_outlined,
+              label: 'Chamber Seating',
+              destination: AppDestination.seating,
+            ),
+            _tile(
+              context,
               icon: Icons.bookmark_outline,
               label: 'Saved',
               destination: AppDestination.saved,
@@ -139,6 +146,8 @@ class AppDrawer extends StatelessWidget {
         _replaceWith(context, const BillsListView());
       case AppDestination.map:
         _replaceWith(context, const ConstituencyMapView());
+      case AppDestination.seating:
+        _replaceWith(context, const HouseSeatingView());
       case AppDestination.saved:
         // Saved is a leaf screen with its own back button.
         Navigator.of(context).push(
