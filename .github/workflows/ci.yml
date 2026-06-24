@@ -27,6 +27,12 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      # `.env` is a declared asset (pubspec.yaml), so analyze/build require it
+      # to exist. It is gitignored, so materialize it from the secret here.
+      # On fork PRs the secret is empty — an empty DSN is fine (Sentry stays off).
+      - name: Write .env
+        run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
+
       - name: Analyze code
         run: flutter analyze --fatal-infos
 
