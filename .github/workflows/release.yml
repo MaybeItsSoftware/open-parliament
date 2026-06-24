@@ -1,10 +1,10 @@
 name: Release
 
+# Manual only: trigger a release deliberately from the Actions tab when you're
+# ready to cut one. This stops semantic-release from auto-publishing on every
+# push to main (which would always start at v1.0.0 on the first run).
 on:
-  push:
-    branches:
-      - main
-      - master
+  workflow_dispatch:
 
 jobs:
   release:
