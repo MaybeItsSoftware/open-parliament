@@ -1,0 +1,76 @@
+# Release lanes for Open Parliament (Flutter).
+#
+#   bundle exec fastlane ios beta       # build IPA -> TestFlight
+#   bundle exec fastlane android beta   # build AAB -> Play internal track
+#
+# Auth is via an App Store Connect API key (iOS) and a Play service account
+# (Android), both supplied through env vars in CI. iOS signing comes from
+# `match`; Android signing from gradle's key.properties (written by CI).
+
+# Repo root — the Fastfile lives in ./fastlane, so its parent is the project
+# root. Using absolute paths sidesteps fastlane's per-action working-directory
+# quirks (flutter must run from the root; build artifacts land there too).
+ROOT = File.expand_path("..", __dir__)
+APP_ID = "uk.co.maybeitssoftware.openparliament"
+TEAM_ID = ENV["TEAM_ID"] || "6NQNU5YSC2"
+
+platform :ios do
+  desc "Build a signed release IPA and upload it to TestFlight"
+  lane :beta do
+    setup_ci # ephemeral keychain on CI; no-op locally
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+
+    # Fetch the distribution cert + profile from match. readonly on CI so a
+    # misconfigured run can never mint new certificates.
+    match(
+      type: "appstore",
+      app_identifier: APP_ID,
+      api_key: api_key,
+      readonly: is_ci,
+    )
+
+    # Point the Xcode project at the match profile and force manual signing,
+    # so `flutter build ipa`'s archive step signs correctly on a headless runner.
+    update_code_signing_settings(
+      path: File.join(ROOT, "ios", "Runner.xcodeproj"),
+      use_automatic_signing: false,
+      team_id: TEAM_ID,
+      code_sign_identity: "Apple Distribution",
+      profile_name: "match AppStore #{APP_ID}",
+      bundle_identifier: APP_ID,
+      targets: ["Runner"],
+    )
+
+    sh("cd #{ROOT} && flutter build ipa --release --export-options-plist=ios/ExportOptions.plist")
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: Dir.glob(File.join(ROOT, "build", "ios", "ipa", "*.ipa")).first,
+      skip_waiting_for_build_processing: true,
+    )
+  end
+end
+
+platform :android do
+  desc "Build a signed release AAB and upload it to the Play internal track"
+  lane :beta do
+    # gradle reads android/key.properties (written by CI) to sign the bundle.
+    sh("cd #{ROOT} && flutter build appbundle --release")
+
+    upload_to_play_store(
+      track: "internal",
+      aab: File.join(ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab"),
+      json_key_data: ENV["PLAY_SERVICE_ACCOUNT_JSON"],
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

@@ -13,7 +13,7 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>uk.co.maybeitssoftware.openparliament</key>
-        <string>Open Parliament Distribution</string>
+        <string>match AppStore uk.co.maybeitssoftware.openparliament</string>
     </dict>
 </dict>
 </plist>

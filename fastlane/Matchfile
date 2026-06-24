@@ -1,0 +1,6 @@
+# Centralized iOS signing. The distribution cert + provisioning profiles live,
+# encrypted, in the match-certs repo; MATCH_PASSWORD decrypts them.
+storage_mode("git")
+git_url(ENV["MATCH_GIT_URL"] || "https://github.com/MaybeItsSoftware/match-certs.git")
+type("appstore")
+app_identifier(["uk.co.maybeitssoftware.openparliament"])

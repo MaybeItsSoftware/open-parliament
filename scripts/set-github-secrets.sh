@@ -22,12 +22,19 @@ echo "Target repository: $REPO"
 gh repo view --json visibility -q '"Visibility: " + .visibility'
 echo
 
-# The exact set of secrets deploy.yml consumes. Only these keys are pushed;
-# any other lines in .env (e.g. SENTRY_DSN used only at runtime) are ignored.
+# The set of secrets deploy.yml consumes that live in .env. Only these keys are
+# pushed; any other lines in .env are ignored.
+#
+# NOTE: iOS signing is handled by `fastlane match`, so the old hand-rolled cert
+# blobs (DIST_CERTIFICATE_BASE64 / DIST_CERTIFICATE_PASSWORD /
+# PROVISIONING_PROFILE_BASE64) are no longer used and are intentionally omitted.
+#
+# Two match secrets are NOT in .env and are set separately:
+#   - MATCH_GIT_URL                 (fixed repo URL; already set)
+#   - MATCH_GIT_BASIC_AUTHORIZATION (base64 "user:PAT" — set with the one-liner
+#                                    in the README; keep the PAT out of .env)
 SECRETS="
-DIST_CERTIFICATE_BASE64
-DIST_CERTIFICATE_PASSWORD
-PROVISIONING_PROFILE_BASE64
+MATCH_PASSWORD
 APP_STORE_CONNECT_API_KEY_ID
 APP_STORE_CONNECT_API_KEY_ISSUER_ID
 APP_STORE_CONNECT_API_KEY_CONTENT
