@@ -571,7 +571,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = 6NQNU5YSC2;
+				PROVISIONING_PROFILE_SPECIFIER = "Open Parliament Distribution";
 				PRODUCT_BUNDLE_IDENTIFIER = uk.co.maybeitssoftware.openparliament;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
