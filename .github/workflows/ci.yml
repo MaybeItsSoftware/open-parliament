@@ -1,8 +1,8 @@
 name: Flutter CI
 
+# Runs on PRs only. Direct pushes to main are gated by the deploy workflow's
+# own "Pre-deploy checks" job, so triggering here too would just duplicate it.
 on:
-  push:
-    branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
 
