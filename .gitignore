@@ -53,3 +53,6 @@ sentry.properties
 .env
 
 secrets/
+
+# Node tooling (commitlint / semantic-release)
+node_modules/

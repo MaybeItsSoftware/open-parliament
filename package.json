@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "husky": "^9.1.7",
+    "semantic-release": "^25.0.5"
+  },
+  "scripts": {
+    "prepare": "husky"
+  }
+}
