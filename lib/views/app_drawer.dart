@@ -39,7 +39,7 @@ class AppDrawer extends StatelessWidget {
                       color: theme.colorScheme.primary, size: 32),
                   const SizedBox(height: 8),
                   Text(
-                    'Open Hansard',
+                    'Open Parliament',
                     style: theme.textTheme.titleLarge
                         ?.copyWith(fontWeight: FontWeight.bold),
                   ),

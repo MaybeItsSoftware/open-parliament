@@ -7,8 +7,12 @@ environment:
   sdk: ">=3.7.0 <4.0.0"
 
 dependencies:
+  sentry_flutter: ^9.22.0
   flutter:
     sdk: flutter
+
+  # Load environment variables from .env file
+  flutter_dotenv: ^5.2.1
 
   # HTTP requests to Parliament APIs
   http: ^1.2.0
@@ -50,9 +54,18 @@ dependencies:
   webview_flutter_wkwebview: ^3.24.5
 
 dev_dependencies:
+  sentry_dart_plugin: ^3.4.0
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
+  assets:
+    - .env
+
+sentry:
+  upload_debug_symbols: true
+  upload_source_maps: true
+  project: open-parliament
+  org: maybeitssoftware

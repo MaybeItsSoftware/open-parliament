@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
 import 'services/parliamentary_data_service.dart';
 import 'services/saved_speeches_service.dart';
@@ -13,8 +16,11 @@ import 'services/party_service.dart';
 import 'utils/map_tiles.dart';
 import 'views/date_selector_view.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load();
+  final sentryDsn = dotenv.env['SENTRY_DSN'] ?? '';
 
   final rootDirectory = await getApplicationSupportDirectory();
   await FMTCObjectBoxBackend().initialise(
@@ -30,6 +36,38 @@ void main() async {
   await savedSpeechesService.load();
   final startupPrefetchService = StartupPrefetchService();
   await startupPrefetchService.load();
+
+  if (sentryDsn.isNotEmpty) {
+    await SentryFlutter.init(
+      (options) {
+        options.dsn = sentryDsn;
+        // Capture all transactions in debug, 20 % in production.
+        options.tracesSampleRate = kDebugMode ? 1.0 : 0.2;
+        options.environment = kDebugMode ? 'debug' : 'production';
+        options.sendDefaultPii = false;
+      },
+      appRunner: () => _startApp(
+        themeService: themeService,
+        savedSpeechesService: savedSpeechesService,
+        startupPrefetchService: startupPrefetchService,
+      ),
+    );
+  } else {
+    // No DSN configured — run without Sentry (local development).
+    _startApp(
+      themeService: themeService,
+      savedSpeechesService: savedSpeechesService,
+      startupPrefetchService: startupPrefetchService,
+    );
+  }
+}
+
+/// Launches the widget tree and kicks off optional startup prefetch.
+void _startApp({
+  required ThemeService themeService,
+  required SavedSpeechesService savedSpeechesService,
+  required StartupPrefetchService startupPrefetchService,
+}) {
   runApp(OpenHansardApp(
     themeService: themeService,
     savedSpeechesService: savedSpeechesService,
@@ -85,9 +123,12 @@ class OpenHansardApp extends StatelessWidget {
       ],
       child: Consumer<ThemeService>(
         builder: (context, theme, _) => MaterialApp(
-          title: 'Open Hansard',
+          title: 'Open Parliament',
           debugShowCheckedModeBanner: false,
           themeMode: theme.themeMode,
+          navigatorObservers: [
+            SentryNavigatorObserver(),
+          ],
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: const Color(0xFF006B3C),

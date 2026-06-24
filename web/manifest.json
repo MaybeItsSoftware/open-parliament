@@ -1,11 +1,11 @@
 {
-    "name": "open_hansard",
-    "short_name": "open_hansard",
+    "name": "Open Parliament",
+    "short_name": "Open Parliament",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Read UK Parliament debates verbatim.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

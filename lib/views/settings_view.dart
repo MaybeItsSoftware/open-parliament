@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -63,6 +64,20 @@ class SettingsView extends StatelessWidget {
             onChanged: (value) =>
                 startupPrefetch.setPrefetchOnStartup(value),
           ),
+          if (kDebugMode) ...[
+            const Divider(),
+            const _SectionHeader('Debug'),
+            ListTile(
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('Verify Sentry setup'),
+              subtitle: const Text(
+                'Throws a test exception to confirm errors reach Sentry.',
+              ),
+              onTap: () => throw StateError(
+                'Sentry verification: this is a test exception',
+              ),
+            ),
+          ],
         ],
       ),
     );

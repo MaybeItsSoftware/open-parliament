@@ -48,3 +48,8 @@ app.*.map.json
 
 # Local Hansard samples
 samples/hansard/
+
+sentry.properties
+.env
+
+secrets/

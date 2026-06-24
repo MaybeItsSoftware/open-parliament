@@ -37,19 +37,23 @@ List<Offset> buildHemicycleLayout(int seatCount) {
   }
 
   final positions = <Offset>[];
-  const innerRadius = 0.28;
-  const outerRadius = 0.95;
   const center = Offset(0.5, 0.95);
+  // Elliptical radii: the horizontal radius stays within the unit box's
+  // half-width (0.5) so seats never overflow the sides, while the vertical
+  // radius can fill nearly the full height up from the bottom-centre.
+  const rxInner = 0.14, rxOuter = 0.48;
+  const ryInner = 0.26, ryOuter = 0.90;
 
   for (var row = 0; row < rows; row++) {
-    final rowRadius =
-        innerRadius + (outerRadius - innerRadius) * ((row + 1) / rows);
+    final frac = (row + 1) / rows;
+    final rx = rxInner + (rxOuter - rxInner) * frac;
+    final ry = ryInner + (ryOuter - ryInner) * frac;
     final rowSeats = seatsPerRow[row];
     for (var i = 0; i < rowSeats; i++) {
       final t = (i + 1) / (rowSeats + 1);
       final angle = math.pi - (t * math.pi);
-      final x = center.dx + rowRadius * math.cos(angle);
-      final y = center.dy - rowRadius * math.sin(angle);
+      final x = center.dx + rx * math.cos(angle);
+      final y = center.dy - ry * math.sin(angle);
       positions.add(Offset(x, y));
     }
   }

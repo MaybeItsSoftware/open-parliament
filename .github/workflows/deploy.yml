@@ -1,0 +1,222 @@
+name: Deploy to TestFlight & Play Store
+
+on:
+  push:
+    branches: [main]
+  # Allow a manual run from the Actions tab — useful for the first deploy and
+  # for re-running without pushing a new commit to main.
+  workflow_dispatch:
+
+# Only one deploy at a time; cancel in-progress runs if a new commit lands.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.44.0'
+
+jobs:
+  # ─── Shared gate: analyse + test before building anything ───
+  test:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze --fatal-infos
+
+      - name: Run unit tests
+        run: flutter test --reporter=compact
+
+  # ─── iOS: build IPA → upload to TestFlight ───
+  deploy-ios:
+    name: iOS → TestFlight
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      DIST_CERTIFICATE_BASE64: ${{ secrets.DIST_CERTIFICATE_BASE64 }}
+      DIST_CERTIFICATE_PASSWORD: ${{ secrets.DIST_CERTIFICATE_PASSWORD }}
+      PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Write .env for release build
+        run: |
+          cat <<EOF > .env
+          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          EOF
+
+      # ── Install the distribution certificate ──
+      - name: Install Apple certificate
+        run: |
+          # Create a temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import the certificate
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          echo -n "$DIST_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -P "$DIST_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+      # ── Install the provisioning profile ──
+      - name: Install provisioning profile
+        run: |
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+
+          # Extract UUID from the profile
+          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< \
+            $(security cms -D -i "$PP_PATH"))
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PP_UUID".mobileprovision
+
+      # ── Build the IPA ──
+      - name: Build IPA
+        run: |
+          flutter build ipa \
+            --release \
+            --export-options-plist=ios/ExportOptions.plist
+
+      # ── Upload to TestFlight via App Store Connect API ──
+      - name: Upload to TestFlight
+        run: |
+          # Write the API key for xcrun altool / notarytool
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 --decode \
+            > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+
+          xcrun altool --upload-app \
+            --type ios \
+            --file build/ios/ipa/*.ipa \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_KEY_ISSUER_ID"
+
+      # ── Upload dSYMs to Sentry ──
+      - name: Upload dSYMs to Sentry
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: |
+          brew install getsentry/tools/sentry-cli
+          sentry-cli debug-files upload \
+            --include-sources \
+            build/ios/archive/Runner.xcarchive/dSYMs
+
+      # ── Clean up keychain ──
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+
+  # ─── Android: build AAB → upload to Play Store ───
+  deploy-android:
+    name: Android → Play Store
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Write .env for release build
+        run: |
+          cat <<EOF > .env
+          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          EOF
+
+      # ── Decode the upload keystore ──
+      - name: Decode signing keystore
+        run: |
+          echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+
+      # ── Write key.properties for Gradle ──
+      - name: Write key.properties
+        run: |
+          cat <<EOF > android/key.properties
+          storeFile=${{ github.workspace }}/android/app/upload-keystore.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+
+      # ── Build the AAB ──
+      - name: Build App Bundle
+        run: flutter build appbundle --release
+
+      # ── Upload to Play Store internal test track ──
+      - name: Upload to Play Store (internal test)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: uk.co.maybeitssoftware.openparliament
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+      # ── Upload debug symbols to Sentry ──
+      - name: Upload native symbols to Sentry
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: |
+          curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload \
+            --include-sources \
+            build/app/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib
