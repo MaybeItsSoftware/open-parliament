@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+
+import '../utils/webview_background.dart';
 
 /// In-app embed of a Parliament Live player URL.
 ///
@@ -41,7 +45,8 @@ class _ParliamentLiveViewState extends State<ParliamentLiveView> {
       params = const PlatformWebViewControllerCreationParams();
     }
 
-    final controller = WebViewController.fromPlatformCreationParams(params)
+    final controller = WebViewController.fromPlatformCreationParams(params);
+    controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -49,11 +54,15 @@ class _ParliamentLiveViewState extends State<ParliamentLiveView> {
             if (mounted) setState(() => _isLoading = true);
           },
           onPageFinished: (_) {
+            unawaited(injectWebViewPageStyles(controller));
             if (mounted) setState(() => _isLoading = false);
           },
         ),
       )
       ..loadRequest(widget.url);
+    unawaited(
+      setWebViewBackgroundColor(controller, const Color(0x00000000)),
+    );
 
     if (controller.platform is AndroidWebViewController) {
       (controller.platform as AndroidWebViewController)
