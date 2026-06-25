@@ -198,6 +198,63 @@ void main() {
     expect(canvas.drawnPaints, hasLength(1));
     expect(canvas.drawnPaints.first.color.a, closeTo(0.3, 0.01));
   });
+
+  test('SankeyFlowPainter stacks parties correctly top-to-bottom and draws flows', () {
+    const y2023 = CouncilYearControl(
+      year: 2023,
+      council: Council(
+        name: 'Test',
+        type: 'District',
+        control: 'LAB',
+        seats: {'Con': 25, 'Lab': 15},
+        total: 40,
+      ),
+    );
+    const y2024 = CouncilYearControl(
+      year: 2024,
+      council: Council(
+        name: 'Test',
+        type: 'District',
+        control: 'LAB',
+        seats: {'Con': 30, 'Lab': 10},
+        total: 40,
+      ),
+    );
+
+    final painter = SankeyFlowPainter(
+      years: const [y2023, y2024],
+      order: const ['Con', 'Lab'],
+      maxTotal: 40,
+      columnWidth: 20,
+      columnGap: 6,
+    );
+
+    final canvas = TestCanvas();
+    painter.paint(canvas, const Size(100, 100));
+
+    expect(canvas.drawnPaths, hasLength(2));
+    
+    final conPath = canvas.drawnPaths[0];
+    final labPath = canvas.drawnPaths[1];
+
+    final conBounds = conPath.getBounds();
+    final labBounds = labPath.getBounds();
+
+    // StartX = 20 (columnWidth). EndX = 26 (StartX + columnGap).
+    expect(conBounds.left, closeTo(20.0, 0.01));
+    expect(conBounds.right, closeTo(26.0, 0.01));
+    // Con top in 2023 is 37.5. Con top in 2024 is 25.0. Minimum is 25.0.
+    expect(conBounds.top, closeTo(25.0, 0.01));
+    // Con bottom is 100 in both.
+    expect(conBounds.bottom, closeTo(100.0, 0.01));
+
+    expect(labBounds.left, closeTo(20.0, 0.01));
+    expect(labBounds.right, closeTo(26.0, 0.01));
+    // Lab top in 2023 is 0. Lab top in 2024 is 0. Minimum is 0.
+    expect(labBounds.top, closeTo(0.0, 0.01));
+    // Lab bottom in 2023 is 37.5. Lab bottom in 2024 is 25.0. Maximum is 37.5.
+    expect(labBounds.bottom, closeTo(37.5, 0.01));
+  });
 }
 
 class TestCanvas extends Fake implements Canvas {

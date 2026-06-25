@@ -248,15 +248,17 @@ class SankeyFlowPainter extends CustomPainter {
 
     for (var i = 0; i < count; i++) {
       final council = years[i].council;
-      double yCurrent = size.height;
+      final total = CouncilControlHistoryChart.seatTotal(council);
+      final double totalSeatsHeight = (total / maxTotal) * size.height;
+      double yCurrent = size.height - totalSeatsHeight; // Start below empty space
 
       for (final label in order.reversed) {
         final seats = council.seats[label] ?? 0;
         if (seats > 0) {
           final double height = (seats / maxTotal) * size.height;
-          final double top = yCurrent - height;
-          columnSegmentsY[i][label] = (top: top, bottom: yCurrent);
-          yCurrent = top;
+          final double bottom = yCurrent + height;
+          columnSegmentsY[i][label] = (top: yCurrent, bottom: bottom);
+          yCurrent = bottom;
         } else {
           columnSegmentsY[i][label] = (top: yCurrent, bottom: yCurrent);
         }
