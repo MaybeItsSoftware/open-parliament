@@ -785,12 +785,20 @@ class _ParliamentLiveInlinePlayerState
     final controller = WebViewController.fromPlatformCreationParams(params);
     controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
             if (mounted) setState(() => _isLoading = true);
           },
           onPageFinished: (_) {
+            unawaited(
+              controller.runJavaScript(
+                "var style = document.createElement('style');"
+                "style.innerHTML = 'html, body { background: transparent !important; }';"
+                "(document.head || document.documentElement).appendChild(style);",
+              ),
+            );
             if (_TranscriptViewState._isEventPageUrl(url)) {
               unawaited(
                 controller.runJavaScript(
