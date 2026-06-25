@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -41,14 +43,23 @@ class _ParliamentLiveViewState extends State<ParliamentLiveView> {
       params = const PlatformWebViewControllerCreationParams();
     }
 
-    final controller = WebViewController.fromPlatformCreationParams(params)
+    final controller = WebViewController.fromPlatformCreationParams(params);
+    controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
             if (mounted) setState(() => _isLoading = true);
           },
           onPageFinished: (_) {
+            unawaited(
+              controller.runJavaScript(
+                "var style = document.createElement('style');"
+                "style.innerHTML = 'html, body { background: transparent !important; }';"
+                "(document.head || document.documentElement).appendChild(style);",
+              ),
+            );
             if (mounted) setState(() => _isLoading = false);
           },
         ),
