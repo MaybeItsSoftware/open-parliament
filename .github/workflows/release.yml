@@ -5,12 +5,42 @@ on:
     branches:
       - main
 
+env:
+  FLUTTER_VERSION: '3.44.0'
+
 jobs:
+  # Gate: tests must pass before semantic-release creates any tag.
+  test:
+    name: Pre-release checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Write .env
+        run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test --reporter=compact
+
   release:
     name: Release
+    needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Crucial for pushing tags and creating releases
+      contents: write
       issues: write
       pull-requests: write
 
@@ -26,7 +56,7 @@ jobs:
           node-version: '22'
 
       - name: Install Dependencies
-        run: npm ci || npm install # Gracefully handle missing package-lock.json
+        run: npm ci || npm install
 
       - name: Run Semantic Release
         env:

@@ -1,16 +1,15 @@
 # Release lanes for Open Parliament (Flutter).
 #
-#   bundle exec fastlane ios beta       # build IPA -> TestFlight
-#   bundle exec fastlane android beta   # build AAB -> Play internal track
+#   bundle exec fastlane ios beta       # build IPA → TestFlight (called by deploy.yml on tag)
+#   bundle exec fastlane ios release    # submit latest TestFlight build for App Store review
+#   bundle exec fastlane android beta   # build AAB → Play internal track
+#   bundle exec fastlane android promote # promote internal → production
 #
 # Auth is via an App Store Connect API key (iOS) and a Play service account
 # (Android), both supplied through env vars in CI. iOS signing comes from
 # `match`; Android signing from gradle's key.properties (written by CI).
 
-# Repo root — the Fastfile lives in ./fastlane, so its parent is the project
-# root. Using absolute paths sidesteps fastlane's per-action working-directory
-# quirks (flutter must run from the root; build artifacts land there too).
-ROOT = File.expand_path("..", __dir__)
+ROOT   = File.expand_path("..", __dir__)
 APP_ID = "uk.co.maybeitssoftware.openparliament"
 TEAM_ID = ENV["TEAM_ID"] || "6NQNU5YSC2"
 
@@ -23,42 +22,72 @@ BUILD_ARG = ENV["BUILD_NUMBER"] ? " --build-number=#{ENV['BUILD_NUMBER']}" : ""
 platform :ios do
   desc "Build a signed release IPA and upload it to TestFlight"
   lane :beta do
-    setup_ci # ephemeral keychain on CI; no-op locally
+    setup_ci
 
     api_key = app_store_connect_api_key(
-      key_id: ENV["ASC_KEY_ID"],
-      issuer_id: ENV["ASC_ISSUER_ID"],
-      key_content: ENV["ASC_KEY_CONTENT"],
-      is_key_content_base64: true,
+      key_id:                  ENV["ASC_KEY_ID"],
+      issuer_id:               ENV["ASC_ISSUER_ID"],
+      key_content:             ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64:   true,
     )
 
-    # Fetch the distribution cert + profile from match. readonly on CI so a
-    # misconfigured run can never mint new certificates.
     match(
-      type: "appstore",
+      type:           "appstore",
       app_identifier: APP_ID,
-      api_key: api_key,
-      readonly: is_ci,
+      api_key:        api_key,
+      readonly:       is_ci,
     )
 
-    # Point the Xcode project at the match profile and force manual signing,
-    # so `flutter build ipa`'s archive step signs correctly on a headless runner.
     update_code_signing_settings(
-      path: File.join(ROOT, "ios", "Runner.xcodeproj"),
+      path:                 File.join(ROOT, "ios", "Runner.xcodeproj"),
       use_automatic_signing: false,
-      team_id: TEAM_ID,
-      code_sign_identity: "Apple Distribution",
-      profile_name: "match AppStore #{APP_ID}",
-      bundle_identifier: APP_ID,
-      targets: ["Runner"],
+      team_id:              TEAM_ID,
+      code_sign_identity:   "Apple Distribution",
+      profile_name:         "match AppStore #{APP_ID}",
+      bundle_identifier:    APP_ID,
+      targets:              ["Runner"],
     )
 
     sh("cd #{ROOT} && flutter build ipa --release#{BUILD_ARG} --export-options-plist=ios/ExportOptions.plist")
 
     upload_to_testflight(
-      api_key: api_key,
-      ipa: Dir.glob(File.join(ROOT, "build", "ios", "ipa", "*.ipa")).first,
+      api_key:                          api_key,
+      ipa:                              Dir.glob(File.join(ROOT, "build", "ios", "ipa", "*.ipa")).first,
       skip_waiting_for_build_processing: true,
+    )
+  end
+
+  desc "Submit a processed TestFlight build for App Store review"
+  lane :release do
+    # Strip leading 'v' so App Store Connect gets a plain semver (e.g. "0.2.0").
+    version = (ENV["VERSION"] || "").sub(/\Av/, "")
+
+    api_key = app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+
+    upload_to_app_store(
+      api_key:             api_key,
+      app_identifier:      APP_ID,
+      app_version:         version,
+      # The binary is already on TestFlight — skip re-uploading the IPA.
+      skip_binary_upload:  true,
+      # Metadata lives in fastlane/metadata/ — upload it with the submission.
+      # Set skip_metadata: true if you manage metadata manually in App Store Connect.
+      skip_metadata:       false,
+      metadata_path:       File.join(__dir__, "metadata"),
+      # Screenshots live in fastlane/screenshots/. Set to true to skip.
+      skip_screenshots:    false,
+      screenshots_path:    File.join(__dir__, "screenshots"),
+      submit_for_review:   true,
+      # Release manually after Apple approves, so you control the rollout moment.
+      automatic_release:   false,
+      force:               true, # skip the HTML diff report
+      # Mark as not using encryption (update if the app uses crypto APIs).
+      export_compliance_uses_encryption: false,
     )
   end
 end
@@ -66,18 +95,39 @@ end
 platform :android do
   desc "Build a signed release AAB and upload it to the Play internal track"
   lane :beta do
-    # gradle reads android/key.properties (written by CI) to sign the bundle.
     sh("cd #{ROOT} && flutter build appbundle --release#{BUILD_ARG}")
 
     upload_to_play_store(
-      package_name: APP_ID,
-      track: "internal",
-      aab: File.join(ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab"),
-      json_key_data: ENV["PLAY_SERVICE_ACCOUNT_JSON"],
-      skip_upload_apk: true,
-      skip_upload_metadata: true,
-      skip_upload_images: true,
+      package_name:          APP_ID,
+      track:                 "internal",
+      aab:                   File.join(ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab"),
+      json_key_data:         ENV["PLAY_SERVICE_ACCOUNT_JSON"],
+      skip_upload_apk:       true,
+      # Metadata and screenshots are managed via the promote lane; keep beta
+      # uploads fast by skipping them here.
+      skip_upload_metadata:  true,
+      skip_upload_images:    true,
       skip_upload_screenshots: true,
+    )
+  end
+
+  desc "Promote the current internal-track build to production"
+  lane :promote do
+    upload_to_play_store(
+      package_name:          APP_ID,
+      track:                 "internal",
+      track_promote_to:      "production",
+      json_key_data:         ENV["PLAY_SERVICE_ACCOUNT_JSON"],
+      skip_upload_apk:       true,
+      skip_upload_aab:       true,
+      # Upload store listing metadata and screenshots alongside the promotion.
+      # Set to true if you manage these in Play Console directly.
+      skip_upload_metadata:  false,
+      skip_upload_images:    false,
+      skip_upload_screenshots: false,
+      metadata_path:         File.join(__dir__, "metadata", "android"),
+      # Optional staged rollout — start at 10 % and ramp via Play Console.
+      # rollout: "0.1",
     )
   end
 end
