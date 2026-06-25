@@ -59,13 +59,32 @@ class CouncilControlHistoryChart extends StatelessWidget {
             final perColumn = (constraints.maxWidth - gaps) / count;
             // Few enough years to fit: stretch the columns to fill the width.
             if (perColumn >= _minColumnWidth) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              return Stack(
                 children: [
-                  for (var i = 0; i < years.length; i++) ...[
-                    if (i > 0) const SizedBox(width: _columnGap),
-                    Expanded(child: _column(theme, years[i], order, maxTotal)),
-                  ],
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    height: _chartHeight,
+                    child: CustomPaint(
+                      painter: SankeyFlowPainter(
+                        years: years,
+                        order: order,
+                        maxTotal: maxTotal,
+                        columnWidth: 0, // dynamic width
+                        columnGap: _columnGap,
+                      ),
+                    ),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      for (var i = 0; i < years.length; i++) ...[
+                        if (i > 0) const SizedBox(width: _columnGap),
+                        Expanded(child: _column(theme, years[i], order, maxTotal)),
+                      ],
+                    ],
+                  ),
                 ],
               );
             }
@@ -73,17 +92,36 @@ class CouncilControlHistoryChart extends StatelessWidget {
             return SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               reverse: true,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              child: Stack(
                 children: [
-                  for (final entry in years)
-                    Padding(
-                      padding: const EdgeInsets.only(right: _columnGap),
-                      child: SizedBox(
-                        width: _scrollColumnWidth,
-                        child: _column(theme, entry, order, maxTotal),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    height: _chartHeight,
+                    child: CustomPaint(
+                      painter: SankeyFlowPainter(
+                        years: years,
+                        order: order,
+                        maxTotal: maxTotal,
+                        columnWidth: _scrollColumnWidth,
+                        columnGap: _columnGap,
                       ),
                     ),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      for (final entry in years)
+                        Padding(
+                          padding: const EdgeInsets.only(right: _columnGap),
+                          child: SizedBox(
+                            width: _scrollColumnWidth,
+                            child: _column(theme, entry, order, maxTotal),
+                          ),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             );

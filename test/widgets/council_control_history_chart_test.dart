@@ -121,6 +121,79 @@ void main() {
     );
   });
 
+  testWidgets('renders SankeyFlowPainter in both layouts', (WidgetTester tester) async {
+    const history = [
+      CouncilYearControl(
+        year: 2026,
+        council: Council(
+          name: 'Adur',
+          type: 'District',
+          control: 'LAB',
+          seats: {'Lab': 17, 'Con': 0, 'Oth': 12},
+          total: 29,
+        ),
+      ),
+      CouncilYearControl(
+        year: 2025,
+        council: Council(
+          name: 'Adur',
+          type: 'District',
+          control: 'LAB',
+          seats: {'Lab': 15, 'Con': 2, 'Oth': 12},
+          total: 29,
+        ),
+      ),
+    ];
+
+    // Layout 1: Stretched (few years, wide screen)
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: 800, // Wide enough for stretched layout
+            child: CouncilControlHistoryChart(history: history),
+          ),
+        ),
+      ),
+    ));
+
+    expect(find.byType(CustomPaint), findsWidgets);
+    var customPaints = tester.widgetList<CustomPaint>(find.byType(CustomPaint));
+    var hasSankey = customPaints.any((p) => p.painter is SankeyFlowPainter);
+    expect(hasSankey, isTrue, reason: 'SankeyFlowPainter should be rendered in stretched layout');
+
+    // Layout 2: Scrollable (many years, narrow screen)
+    final manyYears = [
+      for (var y = 2000; y <= 2026; y++)
+        CouncilYearControl(
+          year: y,
+          council: const Council(
+            name: 'Adur',
+            type: 'District',
+            control: 'LAB',
+            seats: {'Lab': 15, 'Con': 2, 'Oth': 12},
+            total: 29,
+          ),
+        ),
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: 200, // Too narrow, forces scrollable layout
+            child: CouncilControlHistoryChart(history: manyYears),
+          ),
+        ),
+      ),
+    ));
+
+    expect(find.byType(CustomPaint), findsWidgets);
+    customPaints = tester.widgetList<CustomPaint>(find.byType(CustomPaint));
+    hasSankey = customPaints.any((p) => p.painter is SankeyFlowPainter);
+    expect(hasSankey, isTrue, reason: 'SankeyFlowPainter should be rendered in scrollable layout');
+  });
+
   test('SankeyFlowPainter paints without error when history is empty', () {
     final painter = SankeyFlowPainter(
       years: [],
