@@ -8,11 +8,11 @@ Operational guide for AI coding agents working in this repository. Humans are we
 
 Public APIs consumed:
 
-- **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait.
+- **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id) and `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
 - **Hansard API** — debate sections + speeches per sitting day.
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
 - **ONS Open Geography (ArcGIS)** — Westminster constituency and local-authority-district boundary polygons for the national control map (`BoundaryApiService`).
-- **OpenCouncilData** — two feeds. `https://opencouncildata.co.uk/councils.php` HTML table scraped for each council's political control (party / coalition / NOC); `parseCouncils` parses it. `https://opencouncildata.co.uk/csv2.php?y=<year>` is the free annual councillors CSV (name, ward, party — no contacts; those are a paid dataset); `parseCouncillors` parses it. Both cached on disk (30-day TTL) by `CouncilControlService` / `CouncillorService`. CC BY-SA 4.0, so attribute it in any UI that surfaces the data.
+- **OpenCouncilData** — two feeds. `https://opencouncildata.co.uk/councils.php` HTML table scraped for each council's political control (party / coalition / NOC); `parseCouncils` parses it. The `?y=<year>` parameter returns that year's historical composition (archive back to 1973), which drives the council page's control-history section; `CouncilControlService.loadCouncils({year})` caches each year in its own `councils_<year>.json` file so the current table is never overwritten. `https://opencouncildata.co.uk/csv2.php?y=<year>` is the free annual councillors CSV (name, ward, party — no contacts; those are a paid dataset); `parseCouncillors` parses it. Both cached on disk (30-day TTL) by `CouncilControlService` / `CouncillorService`. CC BY-SA 4.0, so attribute it in any UI that surfaces the data.
 - **Democracy Club** (Candidates API, `candidates.democracyclub.org.uk/api/next`, CC BY 4.0) — enriches a councillor with a photo, email, social links and "first elected". There is **no person-name search**, so the join goes through ballots: `election_id=local.<slug>.<date>` lists each ward's elected people (id + name + party); we match by name to the OpenCouncilData councillor (`utils/dc_match.dart`), then fetch `people/<id>` for the photo/contacts. `CouncillorEnrichmentService` caches a per-council roster and per-person profile under `boundary_cache/dc/` (30-day TTL). Best-effort: slug/date/name mismatches just yield no enrichment, and the page falls back to OpenCouncilData-only. Attribute DC wherever its data shows.
 - **parliamentlive.tv** — no documented JSON; we scrape `https://parliamentlive.tv/Search?Start=DD/MM/YYYY&End=DD/MM/YYYY` for `(guid, title)` pairs of broadcast events. Direct deep-links use `https://parliamentlive.tv/event/index/{guid}` (optional `?in=HH:MM:SS`).
 
@@ -83,18 +83,25 @@ lib/
 ├── viewmodels/               # ChangeNotifier — one per primary screen
 │   ├── date_selector_viewmodel.dart
 │   ├── transcript_viewmodel.dart  # Speech normalisation + speaker resolution
-│   └── member_viewmodel.dart
+│   ├── member_viewmodel.dart
+│   ├── constituency_viewmodel.dart      # Latest election result for one seat
+│   └── council_history_viewmodel.dart   # Per-year council control, paged back
 ├── views/                    # StatefulWidget screens, one per route
 │   ├── date_selector_view.dart    # Landing page — calendar of sitting days
 │   ├── transcript_view.dart       # Verbatim transcript for a sitting
-│   ├── member_view.dart           # MP profile + constituency map
-│   ├── constituency_map_view.dart # National control map (constituencies + councils)
-│   ├── council_view.dart          # Council detail: control, boundary map, seat breakdown, ward-grouped councillors (tap → councillor_view)
+│   ├── member_view.dart           # MP profile + constituency map (constituency line → constituency_view)
+│   ├── constituency_map_view.dart # National control map (constituencies + councils); drawer links to constituency_view / council_view / member_view
+│   ├── constituency_view.dart     # Constituency detail: sitting MP, boundary map, latest election result + vote split
+│   ├── council_view.dart          # Council detail: control, boundary map, seat breakdown, control-history graph (stacked seats-per-year columns), ward-grouped councillors (tap → councillor_view)
 │   ├── councillor_view.dart       # Single councillor profile: party, ward, council, next election, web search; lazily enriched with a Democracy Club photo, email, links & "first elected"
 │   └── settings_view.dart
 ├── widgets/
-│   └── speech_block.dart     # Renders all speech-row variants (named, procedural,
-│                             # division, in-the-Chair, committee roster, …)
+│   ├── speech_block.dart     # Renders all speech-row variants (named, procedural,
+│   │                         # division, in-the-Chair, committee roster, …)
+│   ├── control_split_bar.dart # Reusable stacked party-split bar (council seats,
+│   │                         # constituency vote share)
+│   └── council_control_history_chart.dart # Stacked seats-per-year graph (fills
+│                             # width, else scrolls); columns sized from seat sums
 └── utils/
     └── party_colors.dart     # Canonical party tokens + brand colours
 

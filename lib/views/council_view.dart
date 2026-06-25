@@ -1,18 +1,37 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:provider/provider.dart';
 
 import '../models/boundary.dart';
 import '../models/council.dart';
 import '../models/councillor.dart';
+import '../services/parliamentary_data_service.dart';
 import '../utils/area_match.dart';
 import '../utils/council_control.dart';
 import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
+import '../viewmodels/council_history_viewmodel.dart';
+import '../widgets/control_split_bar.dart';
+import '../widgets/council_control_history_chart.dart';
 import 'councillor_view.dart';
 
+/// Ordered seat segments for a council's composition bar (parties largest
+/// first, then any vacant seats).
+List<ControlSegment> councilSegments(Council council) {
+  final vacant = council.seats.entries
+      .where((e) => e.key.toLowerCase() == 'vacant')
+      .fold<int>(0, (sum, e) => sum + e.value);
+  return [
+    for (final e in council.heldSeats) (label: e.key, value: e.value),
+    if (vacant > 0) (label: 'Vacant', value: vacant),
+  ];
+}
+
 /// Profile page for a single local authority: its political control, a boundary
-/// map, and the full seat composition.
-class CouncilView extends StatelessWidget {
+/// map, the seat composition, control history, and elected members.
+class CouncilView extends StatefulWidget {
   final Council council;
   final List<BoundaryPolygon> boundaries;
 
@@ -26,6 +45,33 @@ class CouncilView extends StatelessWidget {
     this.boundaries = const [],
     this.councillors,
   });
+
+  @override
+  State<CouncilView> createState() => _CouncilViewState();
+}
+
+class _CouncilViewState extends State<CouncilView> {
+  late final CouncilHistoryViewModel _history;
+
+  Council get council => widget.council;
+  List<BoundaryPolygon> get boundaries => widget.boundaries;
+  Future<List<Councillor>>? get councillors => widget.councillors;
+
+  @override
+  void initState() {
+    super.initState();
+    _history = CouncilHistoryViewModel(
+      context.read<ParliamentaryDataService>(),
+      councilName: council.name,
+    );
+    unawaited(_history.load());
+  }
+
+  @override
+  void dispose() {
+    _history.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +103,12 @@ class CouncilView extends StatelessWidget {
           if (boundaries.isNotEmpty)
             SliverToBoxAdapter(child: _map(context, color)),
           SliverToBoxAdapter(child: _composition(context)),
+          SliverToBoxAdapter(
+            child: ChangeNotifierProvider.value(
+              value: _history,
+              child: const _ControlHistory(),
+            ),
+          ),
           if (councillors != null)
             SliverToBoxAdapter(
               child: _CouncillorList(
@@ -179,7 +231,7 @@ class CouncilView extends StatelessWidget {
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           if (council.total > 0) ...[
-            _SeatBar(held: held, vacant: vacant, total: council.total),
+            ControlSplitBar(segments: councilSegments(council)),
             const SizedBox(height: 6),
             Text(
               '$majority seats needed for a majority',
@@ -224,35 +276,75 @@ class CouncilView extends StatelessWidget {
   }
 }
 
-/// Horizontal stacked bar of seats by party.
-class _SeatBar extends StatelessWidget {
-  final List<MapEntry<String, int>> held;
-  final int vacant;
-  final int total;
-
-  const _SeatBar({
-    required this.held,
-    required this.vacant,
-    required this.total,
-  });
+/// The council's control over time: a stacked seats-per-year graph
+/// ([CouncilControlHistoryChart]) plus the heading and "load earlier years"
+/// control, driven by [CouncilHistoryViewModel]. Paged further back on demand.
+class _ControlHistory extends StatelessWidget {
+  const _ControlHistory();
 
   @override
   Widget build(BuildContext context) {
-    final segments = [
-      for (final e in held)
-        (flex: e.value, color: party_util.partyColor(e.key)),
-      if (vacant > 0) (flex: vacant, color: party_util.noControlColor),
-    ];
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: SizedBox(
-        height: 16,
-        child: Row(
-          children: [
-            for (final s in segments)
-              Expanded(flex: s.flex, child: ColoredBox(color: s.color)),
-          ],
+    final theme = Theme.of(context);
+    final vm = context.watch<CouncilHistoryViewModel>();
+
+    // While the first batch loads, stay quiet rather than flashing an empty
+    // section; once loaded with nothing to show, omit the section entirely.
+    if (vm.isLoading) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 28, 16, 0),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
         ),
+      );
+    }
+    if (vm.history.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 28, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Control history',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(
+            'Council seats by party, tap a year for the breakdown',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          CouncilControlHistoryChart(history: vm.history),
+          const SizedBox(height: 8),
+          if (vm.isLoadingOlder)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else if (vm.canLoadOlder)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: vm.loadOlder,
+                icon: const Icon(Icons.history, size: 18),
+                label: const Text('Load earlier years'),
+              ),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            'Source: OpenCouncilData (CC BY-SA 4.0)',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
       ),
     );
   }

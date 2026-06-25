@@ -81,7 +81,9 @@ class CouncilControlHistoryChart extends StatelessWidget {
                     children: [
                       for (var i = 0; i < years.length; i++) ...[
                         if (i > 0) const SizedBox(width: _columnGap),
-                        Expanded(child: _column(theme, years[i], order, maxTotal)),
+                        Expanded(
+                          child: _column(theme, years[i], order, maxTotal),
+                        ),
                       ],
                     ],
                   ),
@@ -176,8 +178,9 @@ class CouncilControlHistoryChart extends StatelessWidget {
                         for (final s in segments)
                           Expanded(
                             flex: s.value,
-                            child:
-                                ColoredBox(color: controlSegmentColor(s.label)),
+                            child: ColoredBox(
+                              color: controlSegmentColor(s.label),
+                            ),
                           ),
                       ],
                     ),
@@ -189,8 +192,9 @@ class CouncilControlHistoryChart extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             "'${(entry.year % 100).toString().padLeft(2, '0')}",
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -249,8 +253,8 @@ class CouncilControlHistoryChart extends StatelessWidget {
         totals[e.key] = (totals[e.key] ?? 0) + e.value;
       }
     }
-    final ordered = totals.keys.toList()
-      ..sort((a, b) => totals[b]!.compareTo(totals[a]!));
+    final ordered =
+        totals.keys.toList()..sort((a, b) => totals[b]!.compareTo(totals[a]!));
     return [...ordered, if (vacantKey != null) vacantKey];
   }
 }
@@ -277,18 +281,23 @@ class SankeyFlowPainter extends CustomPainter {
     final count = years.length;
     // Stretched mode vs Scrollable mode:
     // If columnWidth is dynamic (i.e. <= 0), compute it from size.width.
-    final colW = columnWidth > 0
-        ? columnWidth
-        : (size.width - columnGap * (count - 1)) / count;
+    final colW =
+        columnWidth > 0
+            ? columnWidth
+            : (size.width - columnGap * (count - 1)) / count;
 
     // Track vertical segment coordinates for each column
-    final columnSegmentsY = List.generate(count, (_) => <String, ({double top, double bottom})>{});
+    final columnSegmentsY = List.generate(
+      count,
+      (_) => <String, ({double top, double bottom})>{},
+    );
 
     for (var i = 0; i < count; i++) {
       final council = years[i].council;
       final total = CouncilControlHistoryChart.seatTotal(council);
       final double totalSeatsHeight = (total / maxTotal) * size.height;
-      double yCurrent = size.height - totalSeatsHeight; // Start below empty space
+      double yCurrent =
+          size.height - totalSeatsHeight; // Start below empty space
 
       for (final label in order.reversed) {
         final seats = council.seats[label] ?? 0;
@@ -314,32 +323,35 @@ class SankeyFlowPainter extends CustomPainter {
         if (segmentLeft == null || segmentRight == null) continue;
 
         // Only draw if there are seats in either column
-        if (segmentLeft.bottom > segmentLeft.top || segmentRight.bottom > segmentRight.top) {
-          final color = controlSegmentColor(label).withValues(alpha: 0.3);
-          final paint = Paint()
-            ..color = color
-            ..style = PaintingStyle.fill;
+        if (segmentLeft.bottom > segmentLeft.top ||
+            segmentRight.bottom > segmentRight.top) {
+          final color = controlSegmentColor(label).withValues(alpha: 0.8);
+          final paint =
+              Paint()
+                ..color = color
+                ..style = PaintingStyle.fill;
 
-          final path = Path()
-            ..moveTo(startX, segmentLeft.top)
-            ..cubicTo(
-              startX + columnGap / 2,
-              segmentLeft.top,
-              startX + columnGap / 2,
-              segmentRight.top,
-              endX,
-              segmentRight.top,
-            )
-            ..lineTo(endX, segmentRight.bottom)
-            ..cubicTo(
-              startX + columnGap / 2,
-              segmentRight.bottom,
-              startX + columnGap / 2,
-              segmentLeft.bottom,
-              startX,
-              segmentLeft.bottom,
-            )
-            ..close();
+          final path =
+              Path()
+                ..moveTo(startX, segmentLeft.top)
+                ..cubicTo(
+                  startX + columnGap / 2,
+                  segmentLeft.top,
+                  startX + columnGap / 2,
+                  segmentRight.top,
+                  endX,
+                  segmentRight.top,
+                )
+                ..lineTo(endX, segmentRight.bottom)
+                ..cubicTo(
+                  startX + columnGap / 2,
+                  segmentRight.bottom,
+                  startX + columnGap / 2,
+                  segmentLeft.bottom,
+                  startX,
+                  segmentLeft.bottom,
+                )
+                ..close();
 
           canvas.drawPath(path, paint);
         }

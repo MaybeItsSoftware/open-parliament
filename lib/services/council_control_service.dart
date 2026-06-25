@@ -19,8 +19,11 @@ class CouncilControlService {
   CouncilControlService({CouncilControlApiService? api})
       : _api = api ?? CouncilControlApiService();
 
-  Future<List<Council>> loadCouncils() async {
-    final file = await _cacheFile();
+  /// Loads council control. With no [year] this returns the current table;
+  /// pass a year to load that year's historical composition (each year is
+  /// cached in its own file so the current table is never overwritten).
+  Future<List<Council>> loadCouncils({int? year}) async {
+    final file = await _cacheFile(year);
     final now = DateTime.now().toUtc();
     if (file.existsSync()) {
       final modified = file.lastModifiedSync().toUtc();
@@ -36,24 +39,36 @@ class CouncilControlService {
       }
     }
 
-    final fresh = await _api.fetchCouncils();
+    final fresh = await _api.fetchCouncils(year: year);
     await file.parent.create(recursive: true);
     await file.writeAsString(jsonEncode([for (final c in fresh) c.toJson()]));
     return fresh;
   }
 
-  Future<File> _cacheFile() async {
+  Future<File> _cacheFile([int? year]) async {
     final directory = await getApplicationSupportDirectory();
-    return File(p.join(directory.path, 'boundary_cache', 'councils.json'));
+    final name =
+        year != null && year > 0 ? 'councils_$year.json' : 'councils.json';
+    return File(p.join(directory.path, 'boundary_cache', name));
   }
 
-  /// Deletes the cached council control table. Returns 1 if a cache was
-  /// removed, else 0.
+  /// Deletes the cached council control tables (current + any per-year history
+  /// snapshots). Returns the number of files removed.
   Future<int> clearCache() async {
-    final file = await _cacheFile();
-    if (!file.existsSync()) return 0;
-    await file.delete();
-    return 1;
+    final directory = await getApplicationSupportDirectory();
+    final dir = Directory(p.join(directory.path, 'boundary_cache'));
+    if (!dir.existsSync()) return 0;
+    var count = 0;
+    await for (final entity in dir.list()) {
+      final base = p.basename(entity.path);
+      if (entity is File &&
+          (base == 'councils.json' ||
+              RegExp(r'^councils_\d+\.json$').hasMatch(base))) {
+        await entity.delete();
+        count++;
+      }
+    }
+    return count;
   }
 
   void dispose() => _api.dispose();

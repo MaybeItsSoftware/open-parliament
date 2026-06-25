@@ -5,9 +5,11 @@ import '../models/council.dart';
 import '../models/councillor.dart';
 import '../models/councillor_profile.dart';
 import '../models/debate.dart';
+import '../models/election_result.dart';
 import '../models/member.dart';
 import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
+import '../utils/area_match.dart';
 import '../utils/parliament_live.dart' as live_match;
 import 'api_services.dart';
 import 'boundary_service.dart';
@@ -146,6 +148,19 @@ class ParliamentaryDataService {
   Future<List<Council>> fetchCouncils() =>
       _councilControlService.loadCouncils();
 
+  /// The control/seat composition for a single council in a given [year], or
+  /// null when that council isn't present in that year's table. Matched by
+  /// normalised name so ONS / OpenCouncilData spelling differences still line
+  /// up. Used to build a council's control history.
+  Future<Council?> fetchCouncilForYear(String name, int year) async {
+    final councils = await _councilControlService.loadCouncils(year: year);
+    final target = normaliseCouncilName(name);
+    for (final c in councils) {
+      if (normaliseCouncilName(c.name) == target) return c;
+    }
+    return null;
+  }
+
   /// Every UK councillor (name, ward, party), cached nationally.
   Future<List<Councillor>> fetchCouncillors() =>
       _councillorService.loadCouncillors();
@@ -262,6 +277,16 @@ class ParliamentaryDataService {
 
   Future<List<double>?> geocodeConstituency(String constituencyName) =>
       _membersApi.geocodeConstituency(constituencyName);
+
+  /// The latest general-election result for a constituency (by name), or null
+  /// when the seat can't be resolved or has no published result.
+  Future<ConstituencyElectionResult?> fetchConstituencyResult(
+    String constituencyName,
+  ) async {
+    final id = await _membersApi.fetchConstituencyId(constituencyName);
+    if (id == null) return null;
+    return _membersApi.fetchLatestElectionResult(id);
+  }
 
   Future<Member?> fetchAndCacheMemberById(int id) async {
     final detail = await _membersApi.fetchMemberDetail(id);

@@ -14,6 +14,7 @@ import 'package:open_hansard/models/council.dart';
 import 'package:open_hansard/models/councillor.dart';
 import 'package:open_hansard/models/councillor_profile.dart';
 import 'package:open_hansard/models/debate.dart';
+import 'package:open_hansard/models/election_result.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
@@ -157,6 +158,15 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<List<double>?> geocodeConstituency(String constituencyName) async =>
       null;
+
+  @override
+  Future<ConstituencyElectionResult?> fetchConstituencyResult(
+    String constituencyName,
+  ) async =>
+      null;
+
+  @override
+  Future<Council?> fetchCouncilForYear(String name, int year) async => null;
 
   @override
   void dispose() {}

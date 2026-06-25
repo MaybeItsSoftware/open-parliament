@@ -4,6 +4,7 @@ import 'package:open_hansard/models/council.dart';
 import 'package:open_hansard/models/councillor.dart';
 import 'package:open_hansard/models/councillor_profile.dart';
 import 'package:open_hansard/models/debate.dart';
+import 'package:open_hansard/models/election_result.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
 import 'package:open_hansard/models/speech.dart';
@@ -13,6 +14,8 @@ import 'package:open_hansard/utils/party_colors.dart' as party_util;
 import 'package:open_hansard/viewmodels/bill_viewmodel.dart';
 import 'package:open_hansard/viewmodels/bills_list_viewmodel.dart';
 import 'package:open_hansard/viewmodels/constituency_map_viewmodel.dart';
+import 'package:open_hansard/viewmodels/constituency_viewmodel.dart';
+import 'package:open_hansard/viewmodels/council_history_viewmodel.dart';
 import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
 import 'package:open_hansard/viewmodels/house_seating_viewmodel.dart';
 import 'package:open_hansard/viewmodels/member_viewmodel.dart';
@@ -210,6 +213,21 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<List<double>?> geocodeConstituency(String constituencyName) async =>
       null;
+
+  Map<String, ConstituencyElectionResult?> constituencyResults = {};
+
+  @override
+  Future<ConstituencyElectionResult?> fetchConstituencyResult(
+    String constituencyName,
+  ) async =>
+      constituencyResults[constituencyName];
+
+  // Per-year council control, keyed by year. Phase-2 control history.
+  Map<int, Council?> councilByYear = {};
+
+  @override
+  Future<Council?> fetchCouncilForYear(String name, int year) async =>
+      councilByYear[year];
 
   @override
   void dispose() {}
@@ -898,6 +916,13 @@ void main() {
       expect(vm.votes, hasLength(21));
       vm.dispose();
     });
+
+    test('does not throw if notified after dispose', () async {
+      final vm = MemberViewModel(fakeService, member: member);
+      final loadFuture = vm.load();
+      vm.dispose();
+      await loadFuture;
+    });
   });
 
   group('DateSelectorViewModel.detectBillTitle', () {
@@ -1332,6 +1357,142 @@ void main() {
       final seat = vm.seats.single;
       expect(seat.position.dx, inInclusiveRange(0.0, 1.0));
       expect(seat.position.dy, inInclusiveRange(0.0, 1.0));
+    });
+  });
+
+  // ─── ConstituencyViewModel tests ──────────────────────────────────────────
+
+  group('ConstituencyViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    setUp(() => fakeService = _FakeParliamentaryDataService());
+
+    ConstituencyElectionResult buildResult() => const ConstituencyElectionResult(
+          electionTitle: '2024 General Election',
+          electionDate: null,
+          result: 'Lab Hold',
+          majority: 100,
+          turnout: 1000,
+          electorate: 2000,
+          candidates: [
+            ElectionCandidate(
+              name: 'A',
+              party: 'Labour',
+              partyAbbreviation: 'Lab',
+              votes: 600,
+              voteShare: 60,
+              rankOrder: 1,
+              resultChange: '',
+            ),
+          ],
+        );
+
+    test('load populates the result and clears loading', () async {
+      fakeService.constituencyResults = {'Islington North': buildResult()};
+      final vm = ConstituencyViewModel(
+        fakeService,
+        constituencyName: 'Islington North',
+      );
+      expect(vm.isLoading, isTrue);
+      await vm.load();
+      expect(vm.isLoading, isFalse);
+      expect(vm.error, isNull);
+      expect(vm.result?.result, 'Lab Hold');
+    });
+
+    test('load sets error when no result is available', () async {
+      final vm = ConstituencyViewModel(
+        fakeService,
+        constituencyName: 'Nowhere',
+      );
+      await vm.load();
+      expect(vm.isLoading, isFalse);
+      expect(vm.result, isNull);
+      expect(vm.error, isNotNull);
+    });
+
+    test('does not throw if notified after dispose', () async {
+      fakeService.constituencyResults = {'X': buildResult()};
+      final vm = ConstituencyViewModel(fakeService, constituencyName: 'X');
+      final future = vm.load();
+      vm.dispose();
+      await future; // notifyListeners after dispose must be a no-op, not throw
+    });
+  });
+
+  // ─── CouncilHistoryViewModel tests ────────────────────────────────────────
+
+  group('CouncilHistoryViewModel', () {
+    late _FakeParliamentaryDataService fakeService;
+
+    setUp(() => fakeService = _FakeParliamentaryDataService());
+
+    Council councilFor(int year) => Council(
+          name: 'Adur',
+          type: 'District',
+          control: 'LAB',
+          seats: {'Lab': year % 30, 'Con': 5},
+          total: 29,
+        );
+
+    void seedYears(Iterable<int> years) {
+      for (final y in years) {
+        fakeService.councilByYear[y] = councilFor(y);
+      }
+    }
+
+    test('load fetches the last 10 years, newest first', () async {
+      seedYears([for (var y = 2017; y <= 2026; y++) y]);
+      final vm = CouncilHistoryViewModel(
+        fakeService,
+        councilName: 'Adur',
+        fromYear: 2026,
+      );
+      await vm.load();
+      expect(vm.isLoading, isFalse);
+      expect(vm.history, hasLength(10));
+      expect(vm.history.first.year, 2026);
+      expect(vm.history.last.year, 2017);
+    });
+
+    test('omits years that have no data', () async {
+      seedYears([2026, 2025, 2023]); // 2024 missing
+      final vm = CouncilHistoryViewModel(
+        fakeService,
+        councilName: 'Adur',
+        fromYear: 2026,
+      );
+      await vm.load();
+      expect(vm.history.map((h) => h.year), [2026, 2025, 2023]);
+    });
+
+    test('loadOlder appends the next batch of years', () async {
+      seedYears([for (var y = 2007; y <= 2026; y++) y]);
+      final vm = CouncilHistoryViewModel(
+        fakeService,
+        councilName: 'Adur',
+        fromYear: 2026,
+      );
+      await vm.load();
+      expect(vm.history, hasLength(10));
+      await vm.loadOlder();
+      expect(vm.history, hasLength(20));
+      expect(vm.history.last.year, 2007);
+    });
+
+    test('stops offering older years past the data floor', () async {
+      seedYears([for (var y = 1973; y <= 1975; y++) y]);
+      final vm = CouncilHistoryViewModel(
+        fakeService,
+        councilName: 'Adur',
+        fromYear: 1975,
+      );
+      await vm.load();
+      // Scanning down through the floor (1973) exhausts the range.
+      while (vm.canLoadOlder) {
+        await vm.loadOlder();
+      }
+      expect(vm.canLoadOlder, isFalse);
     });
   });
 }

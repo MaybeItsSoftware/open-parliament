@@ -119,3 +119,203 @@ String _partyDisplayName(String code) {
       return code; // local/unknown party: show the raw code
   }
 }
+
+const Set<String> _scottishCouncilNames = {
+  'aberdeen', 'aberdeenshire', 'angus', 'argyll and bute', 'clackmannanshire',
+  'dumfries and galloway', 'dundee', 'east ayrshire', 'east dunbartonshire',
+  'east lothian', 'east renfrewshire', 'edinburgh', 'falkirk', 'fife',
+  'glasgow', 'highland', 'inverclyde', 'midlothian', 'moray', 'north ayrshire',
+  'north lanarkshire', 'orkney', 'perth and kinross', 'renfrewshire',
+  'shetland', 'south ayrshire', 'south lanarkshire', 'stirling',
+  'west dunbartonshire', 'west lothian', 'western isles', 'na h-eileanan siar'
+};
+
+const Set<String> _welshCouncilNames = {
+  'blaenau gwent', 'bridgend', 'caerphilly', 'cardiff', 'carmarthenshire',
+  'ceredigion', 'conwy', 'denbighshire', 'flintshire', 'gwynedd',
+  'isle of anglesey', 'merthyr tydfil', 'monmouthshire', 'neath port talbot',
+  'newport', 'pembrokeshire', 'powys', 'rhondda cynon taf', 'swansea',
+  'torfaen', 'vale of glamorgan', 'wrexham', 'ynys mon'
+};
+
+List<Council> parseHistoricalCouncils16(String html) {
+  final rowPattern = RegExp(r'<tr[^>]*>(.*?)</tr>', dotAll: true);
+  final tdPattern = RegExp(r'<td[^>]*>(.*?)</td>', dotAll: true);
+  final spanPattern = RegExp(
+    r'class="pop\s+([a-zA-Z0-9_-]+)"[^>]*>.*?(?:class="poptext"[^>]*>)?(\d+)',
+    dotAll: true,
+  );
+  final tagPattern = RegExp(r'<[^>]+>');
+
+  String clean(String s) => s.replaceAll(tagPattern, '').replaceAll('&nbsp;', ' ').trim();
+
+  final councils = <Council>[];
+
+  for (final row in rowPattern.allMatches(html)) {
+    final inner = row.group(1)!;
+    final cells = tdPattern.allMatches(inner).map((m) => m.group(1)!).toList();
+    if (cells.length < 3) continue;
+
+    final name = clean(cells[0]);
+    if (name.isEmpty ||
+        name.toLowerCase() == 'authority' ||
+        name.toLowerCase().startsWith('total')) {
+      continue;
+    }
+
+    final total = int.tryParse(clean(cells[1])) ?? 0;
+    if (total == 0) continue;
+
+    final compositionHtml = cells[2];
+    final seats = <String, int>{};
+
+    for (final span in spanPattern.allMatches(compositionHtml)) {
+      final partyClass = span.group(1)!.toLowerCase();
+      final count = int.tryParse(span.group(2)!) ?? 0;
+      if (count == 0) continue;
+
+      final String canonicalKey;
+      switch (partyClass) {
+        case 'con':
+          canonicalKey = 'Con';
+        case 'lab':
+          canonicalKey = 'Lab';
+        case 'ld':
+          canonicalKey = 'LD';
+        case 'grn':
+          canonicalKey = 'Grn';
+        case 'ref':
+          canonicalKey = 'Ref';
+        case 'snp':
+          canonicalKey = 'SNP';
+        case 'pc':
+          canonicalKey = 'PC';
+        case 'vac':
+          canonicalKey = 'Vac';
+        case 'ind':
+        default:
+          canonicalKey = 'Oth';
+      }
+      seats[canonicalKey] = (seats[canonicalKey] ?? 0) + count;
+    }
+
+    // Since control/majority is not in historyYear16.php columns,
+    // we calculate control from the seats!
+    // Control is the party with >50% of the total seats, or "NOC".
+    String control = 'NOC';
+    for (final entry in seats.entries) {
+      if (entry.key != 'Vac' && entry.value > total / 2) {
+        switch (entry.key) {
+          case 'Con':
+            control = 'CON';
+          case 'Lab':
+            control = 'LAB';
+          case 'LD':
+            control = 'LD';
+          case 'Grn':
+            control = 'GRN';
+          case 'Ref':
+            control = 'REF';
+          case 'SNP':
+            control = 'SNP';
+          case 'PC':
+            control = 'PC';
+          case 'Oth':
+            control = 'IND';
+        }
+        break;
+      }
+    }
+
+    final isCity = isCityOfLondonCouncil(name);
+    if (isCity) {
+      control = 'IND';
+    }
+
+    councils.add(Council(
+      name: name,
+      type: isCity ? 'Sui Generis' : '',
+      control: control,
+      seats: seats,
+      total: total,
+    ));
+  }
+  return councils;
+}
+
+List<Council> parseHistoricalCouncils73(String html) {
+  final rowPattern = RegExp(r'<tr[^>]*>(.*?)</tr>', dotAll: true);
+  final tdPattern = RegExp(r'<td[^>]*>(.*?)</td>', dotAll: true);
+  final spanPattern = RegExp(
+    r'class="pop\s+([a-zA-Z0-9_-]+)"[^>]*>.*?(?:class="poptext"[^>]*>)?(\d+)',
+    dotAll: true,
+  );
+  final tagPattern = RegExp(r'<[^>]+>');
+
+  String clean(String s) => s.replaceAll(tagPattern, '').replaceAll('&nbsp;', ' ').trim();
+
+  final councils = <Council>[];
+
+  for (final row in rowPattern.allMatches(html)) {
+    final inner = row.group(1)!;
+    final cells = tdPattern.allMatches(inner).map((m) => m.group(1)!).toList();
+    if (cells.length < 4) continue;
+
+    final name = clean(cells[0]);
+    if (name.isEmpty ||
+        name.toLowerCase() == 'authority' ||
+        name.toLowerCase().startsWith('total')) {
+      continue;
+    }
+
+    final control = clean(cells[1]);
+    final total = int.tryParse(clean(cells[2])) ?? 0;
+    if (total == 0) continue;
+
+    final compositionHtml = cells[3];
+    final seats = <String, int>{};
+
+    final normName = normaliseCouncilName(name);
+    final isScot = _scottishCouncilNames.contains(normName);
+    final isWel = _welshCouncilNames.contains(normName);
+
+    for (final span in spanPattern.allMatches(compositionHtml)) {
+      final partyClass = span.group(1)!.toLowerCase();
+      final count = int.tryParse(span.group(2)!) ?? 0;
+      if (count == 0) continue;
+
+      final String canonicalKey;
+      switch (partyClass) {
+        case 'con':
+          canonicalKey = 'Con';
+        case 'lab':
+          canonicalKey = 'Lab';
+        case 'ld':
+          canonicalKey = 'LD';
+        case 'vac':
+          if (isScot) {
+            canonicalKey = 'SNP';
+          } else if (isWel) {
+            canonicalKey = 'PC';
+          } else {
+            canonicalKey = 'Oth';
+          }
+        case 'ind':
+        default:
+          canonicalKey = 'Oth';
+      }
+      seats[canonicalKey] = (seats[canonicalKey] ?? 0) + count;
+    }
+
+    final isCity = isCityOfLondonCouncil(name);
+
+    councils.add(Council(
+      name: name,
+      type: isCity ? 'Sui Generis' : '',
+      control: isCity ? 'IND' : control,
+      seats: seats,
+      total: total,
+    ));
+  }
+  return councils;
+}
