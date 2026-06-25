@@ -108,6 +108,17 @@ void main() {
       final uri = parliamentLivePlayerUrl(guid, parentUrl: parent);
       expect(uri.fragment, Uri.encodeComponent(parent.toString()));
     });
+
+    test('forwards a seek timecode as the `in` query parameter', () {
+      final uri = parliamentLivePlayerUrl(guid, timecode: '14:30:00');
+      expect(uri.queryParameters['in'], '14:30:00');
+      expect(uri.queryParameters['autoStart'], 'True');
+    });
+
+    test('omits the `in` parameter when no timecode is given', () {
+      final uri = parliamentLivePlayerUrl(guid, timecode: '');
+      expect(uri.queryParameters.containsKey('in'), isFalse);
+    });
   });
 
   group('bestParliamentLiveMatch', () {

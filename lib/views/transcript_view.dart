@@ -51,7 +51,8 @@ class TranscriptView extends StatefulWidget {
   State<TranscriptView> createState() => _TranscriptViewState();
 }
 
-class _TranscriptViewState extends State<TranscriptView> {
+class _TranscriptViewState extends State<TranscriptView>
+    with SingleTickerProviderStateMixin {
   static const int _speechListStartIndex = 1;
 
   late TranscriptViewModel _vm;
@@ -59,6 +60,18 @@ class _TranscriptViewState extends State<TranscriptView> {
   final ItemPositionsListener _positionsListener =
       ItemPositionsListener.create();
   final ScrollController _minimapController = ScrollController();
+
+  /// Parliament Live video tray that drops down from the AppBar. The WebView is
+  /// built lazily on first open ([_playerEverOpened]) and then kept mounted —
+  /// the tray is collapsed by clipping it to zero height — so playback and
+  /// position survive a close/reopen.
+  late final AnimationController _trayController;
+  bool _isPlayerOpen = false;
+  bool _playerEverOpened = false;
+
+  /// True once the list is scrolled away from the very top. Drives the AppBar
+  /// collapsing to a single compact line so the pinned video tray has room.
+  bool _scrolled = false;
 
   /// Cumulative y-offsets in the minimap, one per speech plus a trailing
   /// total (so [_segmentOffsets].length == speeches.length + 1). Recomputed
@@ -85,12 +98,17 @@ class _TranscriptViewState extends State<TranscriptView> {
       initialDebateId: widget.initialDebateId,
     );
     _positionsListener.itemPositions.addListener(_onPositionsChanged);
+    _trayController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
     unawaited(_vm.loadSpeeches());
   }
 
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _trayController.dispose();
     _minimapController.dispose();
     _vm.dispose();
     super.dispose();
@@ -107,9 +125,12 @@ class _TranscriptViewState extends State<TranscriptView> {
       if (topItem == null || p.index < topItem.index) topItem = p;
     }
     if (topItem == null) return;
-    if (topItem.index < _speechListStartIndex) {
-      _syncMinimapScroll(0, 0);
-      return;
+
+    // Collapse the AppBar once the first item (the info header) has scrolled up.
+    final scrolled =
+        topItem.index > 0 || topItem.itemLeadingEdge < -0.01;
+    if (scrolled != _scrolled) {
+      setState(() => _scrolled = scrolled);
     }
 
     final speechIndex = topItem.index - _speechListStartIndex;
@@ -155,6 +176,21 @@ class _TranscriptViewState extends State<TranscriptView> {
     await openParliamentLive(context: context, url: url, title: title);
   }
 
+  /// Opens/closes the Parliament Live video tray. The first open marks
+  /// [_playerEverOpened] so the WebView is mounted from then on (collapsed by
+  /// the [SizeTransition] when closed) rather than rebuilt each time.
+  void _togglePlayer() {
+    setState(() {
+      _isPlayerOpen = !_isPlayerOpen;
+      if (_isPlayerOpen) _playerEverOpened = true;
+    });
+    if (_isPlayerOpen) {
+      _trayController.forward();
+    } else {
+      _trayController.reverse();
+    }
+  }
+
   /// Rightmost segment index whose top edge is at or above `y`. Used for
   /// converting a tap's local y into the speech to jump to.
   int _segmentIndexForY(double y) {
@@ -192,6 +228,10 @@ class _TranscriptViewState extends State<TranscriptView> {
           final house = vm.primaryHouse;
           final appBarColor = _houseColor(house);
           const appBarForeground = Color(0xFFFFE000);
+          final titleText = (vm.primaryDebateTitle != null &&
+                  vm.primaryDebateTitle!.isNotEmpty)
+              ? vm.primaryDebateTitle!
+              : 'Hansard Debate';
 
           return Scaffold(
             appBar: AppBar(
@@ -200,29 +240,72 @@ class _TranscriptViewState extends State<TranscriptView> {
               iconTheme: appBarColor != null
                   ? const IconThemeData(color: appBarForeground)
                   : null,
-              title: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    (vm.primaryDebateTitle != null &&
-                            vm.primaryDebateTitle!.isNotEmpty)
-                        ? vm.primaryDebateTitle!
-                        : 'Hansard Debate',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    widget.displayDate,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: appBarColor != null
-                              ? appBarForeground.withValues(alpha: 0.8)
-                              : null,
-                        ),
+              toolbarHeight: _scrolled ? 48 : kToolbarHeight,
+              title: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: _scrolled
+                    ? Text(
+                        titleText,
+                        key: const ValueKey('title-compact'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Column(
+                        key: const ValueKey('title-full'),
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            titleText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            widget.displayDate,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelMedium
+                                ?.copyWith(
+                                  color: appBarColor != null
+                                      ? appBarForeground.withValues(alpha: 0.8)
+                                      : null,
+                                ),
+                          ),
+                        ],
+                      ),
+              ),
+              actions: [
+                if (parliamentLiveSectionHasVideo(vm.primarySection)) ...[
+                  if (_isPlayerOpen)
+                    FutureBuilder<ParliamentLiveTarget>(
+                      future: vm.parliamentLiveTarget(),
+                      builder: (context, snapshot) {
+                        final target = snapshot.data;
+                        if (target == null) return const SizedBox.shrink();
+                        return IconButton(
+                          icon: const Icon(Icons.open_in_new),
+                          tooltip: 'Open full player',
+                          onPressed: () => _openParliamentLiveUrl(
+                            target.launchUrl,
+                            title: 'Parliament Live · ${target.title}',
+                          ),
+                        );
+                      },
+                    ),
+                  IconButton(
+                    icon: Icon(
+                      _isPlayerOpen
+                          ? Icons.smart_display
+                          : Icons.smart_display_outlined,
+                    ),
+                    tooltip: _isPlayerOpen
+                        ? 'Hide Parliament Live video'
+                        : 'Show Parliament Live video',
+                    onPressed: _togglePlayer,
                   ),
                 ],
-              ),
+              ],
             ),
             body: LayoutBuilder(
               builder: (context, constraints) {
@@ -230,23 +313,29 @@ class _TranscriptViewState extends State<TranscriptView> {
                 if (vm.isLoading) return _buildLoadingIndicator();
                 if (vm.error != null) return _buildErrorView(vm.error!);
                 if (vm.speeches.isEmpty) return _buildEmptyView();
-                return Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: maxWidth + _minimapWidth,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(child: _buildTranscriptList(vm)),
-                          _buildMinimap(vm),
-                        ],
+                final contentWidth = maxWidth + _minimapWidth;
+                return Column(
+                  children: [
+                    _buildPlayerTraySection(vm, contentWidth),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: contentWidth),
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(child: _buildTranscriptList(vm)),
+                                _buildMinimap(vm),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 );
               },
             ),
@@ -336,7 +425,7 @@ class _TranscriptViewState extends State<TranscriptView> {
         itemPositionsListener: _positionsListener,
         itemBuilder: (context, index) {
           if (index == 0) {
-            return _buildParliamentLiveHeader(vm);
+            return _buildDebateInfoHeader(vm);
           }
 
           final speechIndex = index - _speechListStartIndex;
@@ -364,140 +453,113 @@ class _TranscriptViewState extends State<TranscriptView> {
     );
   }
 
-  Widget _buildParliamentLiveHeader(TranscriptViewModel vm) {
-    final hasVideo = parliamentLiveSectionHasVideo(vm.primarySection);
+  /// Small informational line at the very top of the debate (scrolls away with
+  /// the content) showing when the House met and when this debate begins —
+  /// previously shown inside the video tray.
+  Widget _buildDebateInfoHeader(TranscriptViewModel vm) {
+    final theme = Theme.of(context);
     final metTime = vm.sittingStartTimeLabel;
     final debateTitle = (vm.primaryDebateTitle ?? '').trim();
     final debateStartLabel =
         vm.parliamentLiveStartLabelForDebateTitle(debateTitle);
     final showDebateStart =
         debateStartLabel != null && debateStartLabel != metTime;
-    final unavailableMessage =
-        parliamentLiveSectionUnavailableMessage(vm.primarySection);
+    if (metTime == null && !showDebateStart) return const SizedBox.shrink();
+    final style = theme.textTheme.labelMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-      child: Card(
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(
-            color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-          child: hasVideo
-              ? FutureBuilder<ParliamentLiveTarget>(
-                  future: vm.parliamentLiveTarget(),
-                  builder: (context, snapshot) {
-                    final target = snapshot.data;
-                    const heading = 'Parliament Live';
-                    final Widget videoPane;
-                    if (snapshot.connectionState ==
-                        ConnectionState.waiting) {
-                      videoPane = const _ParliamentLiveLoadingPane();
-                    } else if (target != null && target.inlineUrl != null) {
-                      videoPane =
-                          _ParliamentLiveInlinePlayer(url: target.inlineUrl!);
-                    } else if (target != null) {
-                      videoPane = SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: () => _openParliamentLiveUrl(
-                            target.launchUrl,
-                            title: 'Parliament Live · ${target.title}',
-                          ),
-                          icon: const Icon(Icons.play_circle_outline),
-                          label: Text(
-                            target.hasDirectEvent
-                                ? 'Open player'
-                                : 'Open video search',
-                          ),
-                        ),
-                      );
-                    } else {
-                      videoPane = const _ParliamentLiveLoadingPane();
-                    }
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+      child: Wrap(
+        spacing: 14,
+        runSpacing: 2,
+        children: [
+          if (metTime != null) Text('House met at $metTime', style: style),
+          if (showDebateStart)
+            Text('Debate starts at $debateStartLabel', style: style),
+        ],
+      ),
+    );
+  }
 
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.play_circle_outline),
-                            const SizedBox(width: 8),
-                            const Expanded(
-                              child: Text(
-                                heading,
-                                style: TextStyle(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                            if (target != null)
-                              IconButton(
-                                icon: const Icon(Icons.open_in_new, size: 18),
-                                tooltip: 'Open full player',
-                                onPressed: () => _openParliamentLiveUrl(
-                                  target.launchUrl,
-                                  title: 'Parliament Live · ${target.title}',
-                                ),
-                              ),
-                          ],
-                        ),
-                          const SizedBox(height: 8),
-                          videoPane,
-                          if (metTime != null || showDebateStart)
-                            const SizedBox(height: 6),
-                          if (metTime != null)
-                            Text(
-                              'House met at $metTime',
-                              style: Theme.of(context).textTheme.labelMedium,
-                            ),
-                          if (showDebateStart)
-                            Text(
-                              'Debate starts at $debateStartLabel',
-                              style: Theme.of(context).textTheme.labelMedium,
-                            ),
-                        ],
-                    );
-                  },
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.play_circle_outline),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Parliament Live',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (metTime != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'House met at $metTime',
-                        style: Theme.of(context).textTheme.labelMedium,
+  /// The Parliament Live video tray. It sits in the layout flow (a [Column]
+  /// child above the scrolling list) so opening it pushes the transcript and
+  /// minimap down rather than floating over them, and it stays pinned while the
+  /// debate scrolls. Built lazily on first open and then kept mounted —
+  /// collapsed to zero height by the [SizeTransition] — so playback and
+  /// position survive a close/reopen.
+  ///
+  /// [Align] uses `heightFactor: 1` so the section shrink-wraps its child's
+  /// height (a plain greedy [Align] would overflow the unbounded vertical
+  /// space a [Column] hands its children).
+  Widget _buildPlayerTraySection(TranscriptViewModel vm, double maxWidth) {
+    if (!_playerEverOpened) return const SizedBox.shrink();
+    return SizeTransition(
+      sizeFactor: CurvedAnimation(
+        parent: _trayController,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      ),
+      child: Align(
+        alignment: Alignment.topCenter,
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: _buildPlayerTray(vm),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlayerTray(TranscriptViewModel vm) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Material(
+          elevation: 4,
+          clipBehavior: Clip.antiAlias,
+          color: theme.colorScheme.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: FutureBuilder<ParliamentLiveTarget>(
+              future: vm.parliamentLiveTarget(),
+              builder: (context, snapshot) {
+                final target = snapshot.data;
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const _ParliamentLiveLoadingPane();
+                }
+                if (target != null && target.inlineUrl != null) {
+                  return _ParliamentLiveInlinePlayer(
+                    url: target.inlineUrl!,
+                    isOpen: _isPlayerOpen,
+                  );
+                }
+                if (target != null) {
+                  return SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => _openParliamentLiveUrl(
+                        target.launchUrl,
+                        title: 'Parliament Live · ${target.title}',
                       ),
-                    ],
-                    if (showDebateStart) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Debate starts at $debateStartLabel',
-                        style: Theme.of(context).textTheme.labelMedium,
+                      icon: const Icon(Icons.play_circle_outline),
+                      label: Text(
+                        target.hasDirectEvent
+                            ? 'Open player'
+                            : 'Open video search',
                       ),
-                    ],
-                    const SizedBox(height: 8),
-                    Text(
-                      unavailableMessage ??
-                          'No Parliament Live video is available for this section.',
-                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                  ],
-                ),
+                  );
+                }
+                return const _ParliamentLiveLoadingPane();
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -659,7 +721,12 @@ class _ParliamentLiveLoadingPane extends StatelessWidget {
 class _ParliamentLiveInlinePlayer extends StatefulWidget {
   final Uri url;
 
-  const _ParliamentLiveInlinePlayer({required this.url});
+  /// Whether the tray is currently open. The player stays mounted while the
+  /// tray is collapsed (so it can resume), so we pause its media when this
+  /// flips to false.
+  final bool isOpen;
+
+  const _ParliamentLiveInlinePlayer({required this.url, required this.isOpen});
 
   @override
   State<_ParliamentLiveInlinePlayer> createState() =>
@@ -683,10 +750,25 @@ class _ParliamentLiveInlinePlayerState
   void didUpdateWidget(covariant _ParliamentLiveInlinePlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextUrl = widget.url.toString();
-    if (nextUrl == _urlKey) return;
-    _urlKey = nextUrl;
-    _isLoading = true;
-    _controller = _buildController(widget.url);
+    if (nextUrl != _urlKey) {
+      _urlKey = nextUrl;
+      _isLoading = true;
+      _controller = _buildController(widget.url);
+      return;
+    }
+    // The tray was collapsed — pause so audio doesn't keep playing underneath.
+    if (oldWidget.isOpen && !widget.isOpen) {
+      _pauseMedia();
+    }
+  }
+
+  void _pauseMedia() {
+    unawaited(
+      _controller.runJavaScript(
+        "document.querySelectorAll('video,audio')"
+        ".forEach(function(m){try{m.pause();}catch(e){}});",
+      ),
+    );
   }
 
   WebViewController _buildController(Uri url) {

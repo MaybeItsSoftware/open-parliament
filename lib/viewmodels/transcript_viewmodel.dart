@@ -275,10 +275,16 @@ class TranscriptViewModel extends ChangeNotifier {
     if (!_supportsInlineWebView) return null;
     final guid = _eventGuidFromEventUrl(launchUrl);
     if (guid == null) return null;
-    // Keep the event page when deep-linking by timecode so it can relay the seek.
-    if (launchUrl.queryParameters.containsKey('in')) return launchUrl;
-    // Use the standalone player in-card for reliable play controls otherwise.
-    return live_url.parliamentLivePlayerUrl(guid, parentUrl: launchUrl);
+    // Always embed the standalone player so the tray shows just the video and
+    // its media controls — never the scrollable event page. Any `?in=` seek is
+    // forwarded (both as a player query and via the parent URL) so the video
+    // still starts at the debate's timecode where the player honours it.
+    final timecode = launchUrl.queryParameters['in'];
+    return live_url.parliamentLivePlayerUrl(
+      guid,
+      parentUrl: launchUrl,
+      timecode: timecode,
+    );
   }
 
   static bool get _supportsInlineWebView {

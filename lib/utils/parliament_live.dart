@@ -32,15 +32,17 @@ Uri parliamentLiveEventUrl(String guid, {String? timecode}) {
 /// the full site shell around the player. The standalone player endpoint is a
 /// better fit for in-app WebViews because it avoids nested cross-site iframe
 /// and cookie constraints.
-Uri parliamentLivePlayerUrl(String guid, {Uri? parentUrl}) {
+Uri parliamentLivePlayerUrl(String guid, {Uri? parentUrl, String? timecode}) {
+  final query = <String, String>{
+    'audioOnly': 'False',
+    'autoStart': 'True',
+    'script': 'True',
+  };
+  if (timecode != null && timecode.isNotEmpty) query['in'] = timecode;
   final base = Uri.https(
     'videoplayback.parliamentlive.tv',
     '/Player/Index/$guid',
-    const {
-      'audioOnly': 'False',
-      'autoStart': 'True',
-      'script': 'True',
-    },
+    query,
   );
   if (parentUrl == null) return base;
   return Uri.parse(
