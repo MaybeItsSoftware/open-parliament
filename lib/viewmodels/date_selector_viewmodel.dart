@@ -124,6 +124,48 @@ class DateSelectorViewModel extends ChangeNotifier {
     return previousSittingDay(normalized);
   }
 
+  /// In-memory cache of enumerated sitting days, keyed by `YYYY-MM`.
+  final Map<String, Set<DateTime>> _sittingDaysByMonth = {};
+
+  /// Returns the set of sitting days (normalised to midnight) within the
+  /// calendar month containing [month].
+  ///
+  /// Fetched in one request per house via the Hansard calendar endpoint
+  /// ([ParliamentaryDataService.getSittingDates]) and capped at today. Results
+  /// are cached per year-month so paging the calendar back and forth never
+  /// refetches. A month with no sittings (recess) or one entirely in the future
+  /// yields an empty set (the future case makes no network call).
+  Future<Set<DateTime>> sittingDaysInMonth(DateTime month) async {
+    final key = _monthKey(month);
+    final cached = _sittingDaysByMonth[key];
+    if (cached != null) return cached;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final firstOfMonth = DateTime(month.year, month.month, 1);
+
+    final result = <DateTime>{};
+
+    // The whole month is in the future — nothing to fetch, no API calls.
+    if (firstOfMonth.isAfter(today)) {
+      _sittingDaysByMonth[key] = result;
+      return result;
+    }
+
+    final dates = await _service.getSittingDates(month.year, month.month);
+    for (final date in dates) {
+      final normalized = DateTime(date.year, date.month, date.day);
+      if (!normalized.isAfter(today)) result.add(normalized);
+    }
+
+    _sittingDaysByMonth[key] = result;
+    return result;
+  }
+
+  static String _monthKey(DateTime month) =>
+      '${month.year.toString().padLeft(4, '0')}-'
+      '${month.month.toString().padLeft(2, '0')}';
+
   void setFocusedDay(DateTime day) {
     _focusedDay = day;
     notifyListeners();

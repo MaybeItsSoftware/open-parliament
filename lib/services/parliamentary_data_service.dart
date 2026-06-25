@@ -348,6 +348,18 @@ class ParliamentaryDataService {
     return linked.nextSittingDate;
   }
 
+  /// Returns the set of sitting dates (normalised to midnight) in [month] of
+  /// [year] across both houses, fetched in one request per house via the
+  /// Hansard calendar endpoint.
+  Future<Set<DateTime>> getSittingDates(int year, int month) async {
+    final result = <DateTime>{};
+    for (final house in const ['Commons', 'Lords']) {
+      final dates = await _hansardApi.fetchSittingCalendar(year, month, house);
+      result.addAll(dates);
+    }
+    return result;
+  }
+
   Future<bool> _isMembersCacheFresh(Database db) async {
     final rows = await db.query(
       'meta',

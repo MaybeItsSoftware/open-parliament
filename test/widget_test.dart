@@ -117,6 +117,10 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<DateTime?> getNextSittingDate(String date) async => null;
 
   @override
+  Future<Set<DateTime>> getSittingDates(int year, int month) async =>
+      <DateTime>{};
+
+  @override
   Future<int> wipeDebateCache() async => 0;
 
   @override

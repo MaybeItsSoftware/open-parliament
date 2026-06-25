@@ -26,6 +26,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   bool hasSittingDataResult = true;
   DateTime? previousSittingDateResult;
   DateTime? nextSittingDateResult;
+
+  /// Optional scripted override for [getSittingDates], called with the
+  /// requested (year, month). When unset, [sittingDatesResult] is returned.
+  /// [getSittingDatesCalls] counts every invocation.
+  Set<DateTime> Function(int year, int month)? sittingDatesBuilder;
+  Set<DateTime> sittingDatesResult = <DateTime>{};
+  int getSittingDatesCalls = 0;
   List<Speech> speechesResult = [];
   List<Member> membersResult = [];
   Map<int, Member?> memberResults = {};
@@ -114,6 +121,14 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<DateTime?> getNextSittingDate(String date) async =>
       nextSittingDateResult;
+
+  @override
+  Future<Set<DateTime>> getSittingDates(int year, int month) async {
+    getSittingDatesCalls++;
+    final builder = sittingDatesBuilder;
+    if (builder != null) return builder(year, month);
+    return sittingDatesResult;
+  }
 
   @override
   Future<List<Speech>> getSpeeches(String date) async {
@@ -320,6 +335,78 @@ void main() {
       fakeService.previousSittingDateResult = DateTime(2024, 7, 22);
       final result = await vm.mostRecentSittingDay(DateTime(2024, 8, 15));
       expect(result, DateTime(2024, 7, 22));
+    });
+
+    group('sittingDaysInMonth', () {
+      Set<DateTime> weekdaysOfMonth(int year, int month) {
+        final days = <DateTime>{};
+        final last = DateTime(year, month + 1, 0).day;
+        for (var d = 1; d <= last; d++) {
+          final day = DateTime(year, month, d);
+          if (day.weekday <= DateTime.friday) days.add(day);
+        }
+        return days;
+      }
+
+      test('returns the sitting dates supplied by the service', () async {
+        fakeService.sittingDatesBuilder = weekdaysOfMonth;
+
+        final result = await vm.sittingDaysInMonth(DateTime(2024, 11));
+
+        expect(result, weekdaysOfMonth(2024, 11));
+      });
+
+      test('normalises any time component to midnight', () async {
+        fakeService.sittingDatesResult = {
+          DateTime(2024, 11, 4, 9, 30),
+          DateTime(2024, 11, 5, 14),
+        };
+
+        final result = await vm.sittingDaysInMonth(DateTime(2024, 11));
+
+        expect(result, {DateTime(2024, 11, 4), DateTime(2024, 11, 5)});
+      });
+
+      test('caps the result at today for the current month', () async {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        fakeService.sittingDatesBuilder = weekdaysOfMonth;
+
+        final result =
+            await vm.sittingDaysInMonth(DateTime(now.year, now.month));
+
+        expect(result.every((d) => !d.isAfter(today)), isTrue);
+      });
+
+      test('returns empty set with no service call for a future month',
+          () async {
+        fakeService.sittingDatesBuilder = weekdaysOfMonth;
+        final now = DateTime.now();
+        final nextMonth = DateTime(now.year, now.month + 1);
+
+        final result = await vm.sittingDaysInMonth(nextMonth);
+
+        expect(result, isEmpty);
+        expect(fakeService.getSittingDatesCalls, 0);
+      });
+
+      test('returns empty set for a recess month', () async {
+        fakeService.sittingDatesResult = <DateTime>{};
+
+        final result = await vm.sittingDaysInMonth(DateTime(2024, 11));
+
+        expect(result, isEmpty);
+      });
+
+      test('caches the result so a second call makes no service call',
+          () async {
+        fakeService.sittingDatesBuilder = weekdaysOfMonth;
+
+        await vm.sittingDaysInMonth(DateTime(2024, 11));
+        await vm.sittingDaysInMonth(DateTime(2024, 11));
+
+        expect(fakeService.getSittingDatesCalls, 1);
+      });
     });
   });
 
