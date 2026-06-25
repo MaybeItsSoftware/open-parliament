@@ -24,6 +24,24 @@ class _StubHttpClient extends http.BaseClient {
   }
 }
 
+/// Stub that records the URLs it was asked for, returning a fixed body.
+class _CapturingHttpClient extends http.BaseClient {
+  final String body;
+  final List<Uri> requests = [];
+
+  _CapturingHttpClient(this.body);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests.add(request.url);
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(body)),
+      200,
+      headers: {'content-type': 'text/html'},
+    );
+  }
+}
+
 http.Response _jsonResponse(Object body, {int statusCode = 200}) {
   return http.Response(
     jsonEncode(body),
@@ -118,6 +136,154 @@ void main() {
       final members = await service.fetchAllMembers();
       expect(members, hasLength(1));
       expect(members.first.name, 'Valid MP');
+    });
+  });
+
+  // ─── Constituency election results ───────────────────────────────────────
+
+  group('MembersApiService constituency results', () {
+    test('fetchConstituencyId returns the id of the matching constituency',
+        () async {
+      final stub = _StubHttpClient([
+        _jsonResponse({
+          'items': [
+            {
+              'value': {'id': 4120, 'name': 'Islington North'},
+            },
+            {
+              'value': {'id': 4121, 'name': 'Islington South and Finsbury'},
+            },
+          ],
+        }),
+      ]);
+      final service = MembersApiService(client: stub);
+      final id = await service.fetchConstituencyId('Islington North');
+      expect(id, 4120);
+    });
+
+    test('fetchConstituencyId matches ignoring case/punctuation, else first',
+        () async {
+      final stub = _StubHttpClient([
+        _jsonResponse({
+          'items': [
+            {
+              'value': {'id': 99, 'name': 'Some Other Seat'},
+            },
+            {
+              'value': {'id': 7, 'name': 'Ashton-under-Lyne'},
+            },
+          ],
+        }),
+      ]);
+      final service = MembersApiService(client: stub);
+      final id = await service.fetchConstituencyId('ashton under lyne');
+      expect(id, 7);
+    });
+
+    test('fetchConstituencyId returns null when no items', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse({'items': []}),
+      ]);
+      final service = MembersApiService(client: stub);
+      expect(await service.fetchConstituencyId('Nowhere'), isNull);
+    });
+
+    test('fetchLatestElectionResult parses the result and candidates',
+        () async {
+      final stub = _StubHttpClient([
+        _jsonResponse({
+          'value': {
+            'electionTitle': '2024 General Election',
+            'electionDate': '2024-07-04T00:00:00',
+            'result': 'Lab Hold',
+            'majority': 7247,
+            'turnout': 49006,
+            'electorate': 72852,
+            'candidates': [
+              {
+                'name': 'A Winner',
+                'party': {'name': 'Labour', 'abbreviation': 'Lab'},
+                'votes': 24120,
+                'voteShare': 49.2,
+                'rankOrder': 1,
+              },
+            ],
+          },
+        }),
+      ]);
+      final service = MembersApiService(client: stub);
+      final result = await service.fetchLatestElectionResult(4120);
+      expect(result, isNotNull);
+      expect(result!.electionTitle, '2024 General Election');
+      expect(result.majority, 7247);
+      expect(result.candidates.single.name, 'A Winner');
+    });
+
+    test('fetchLatestElectionResult returns null on HTTP error', () async {
+      final stub = _StubHttpClient([http.Response('nope', 404)]);
+      final service = MembersApiService(client: stub);
+      expect(await service.fetchLatestElectionResult(4120), isNull);
+    });
+  });
+
+  // ─── CouncilControlApiService year plumbing ──────────────────────────────
+
+  group('CouncilControlApiService', () {
+    const htmlCurrent = '''
+      <table>
+        <tr><th>Type</th><th>Council</th><th>Control</th><th>Lab</th><th>Total</th></tr>
+        <tr><td>District</td><td>Adur</td><td>LAB</td><td>17</td><td>29</td></tr>
+      </table>
+    ''';
+
+    const html16 = '''
+      <table>
+        <tr><td>Adur</td><td>29</td><td>
+          <div class="stacked-bar-graph">
+            <span class="pop con" style="width: 50%"><span class="poptext">17</span></span>
+          </div>
+        </td></tr>
+      </table>
+    ''';
+
+    const html73 = '''
+      <table>
+        <tr><td>Adur</td><td>Con</td><td>29</td><td>
+          <div class="stacked-bar-graph">
+            <span class="pop con" style="width: 50%"><span class="poptext">20</span></span>
+          </div>
+        </td></tr>
+      </table>
+    ''';
+
+    test('fetchCouncils without a year requests the current table and parses', () async {
+      final client = _CapturingHttpClient(htmlCurrent);
+      final service = CouncilControlApiService(client: client);
+      final councils = await service.fetchCouncils();
+      expect(client.requests.single.path, '/councils.php');
+      expect(client.requests.single.queryParameters['y'], '0');
+      expect(councils.single.name, 'Adur');
+      expect(councils.single.control, 'LAB');
+    });
+
+    test('fetchCouncils with year >= 2016 requests historyYear16 and parses', () async {
+      final client = _CapturingHttpClient(html16);
+      final service = CouncilControlApiService(client: client);
+      final councils = await service.fetchCouncils(year: 2018);
+      expect(client.requests.single.path, '/historyYear16.php');
+      expect(client.requests.single.queryParameters['y'], '2018');
+      expect(councils.single.name, 'Adur');
+      expect(councils.single.control, 'CON');
+    });
+
+    test('fetchCouncils with year < 2016 requests historyYear73 and parses', () async {
+      final client = _CapturingHttpClient(html73);
+      final service = CouncilControlApiService(client: client);
+      final councils = await service.fetchCouncils(year: 2015);
+      expect(client.requests.single.path, '/historyYear73.php');
+      expect(client.requests.single.queryParameters['y'], '2015');
+      expect(councils.single.name, 'Adur');
+      expect(councils.single.control, 'Con');
     });
   });
 

@@ -14,6 +14,7 @@ import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/constituency_map_viewmodel.dart';
 import 'app_drawer.dart';
+import 'constituency_view.dart';
 import 'council_view.dart';
 import 'member_view.dart';
 
@@ -146,6 +147,18 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     if (member == null) return;
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => MemberView(member: member)),
+    );
+  }
+
+  void _openConstituency(MapArea area) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ConstituencyView(
+          constituencyName: area.name,
+          member: area.member,
+          boundaries: _vm.polygonsForName(area.name),
+        ),
+      ),
     );
   }
 
@@ -309,6 +322,13 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                           onOpenMp: (_selected ?? _lastArea!).member == null
                               ? null
                               : () => _openMp(_selected ?? _lastArea!),
+                          // Constituencies (no council) get a detail page; the
+                          // name is enough to look up the election result.
+                          onOpenConstituency:
+                              (_selected ?? _lastArea!).council != null ||
+                                      (_selected ?? _lastArea!).name.isEmpty
+                                  ? null
+                                  : () => _openConstituency(_selected ?? _lastArea!),
                         ),
                       ),
                     ),
@@ -422,11 +442,15 @@ class _AreaDrawer extends StatelessWidget {
   /// constituency with a vacant seat).
   final VoidCallback? onOpenMp;
 
+  /// Opens the constituency detail page; null for councils.
+  final VoidCallback? onOpenConstituency;
+
   const _AreaDrawer({
     required this.area,
     required this.onClose,
     this.onOpenCouncil,
     this.onOpenMp,
+    this.onOpenConstituency,
   });
 
   @override
@@ -520,15 +544,27 @@ class _AreaDrawer extends StatelessWidget {
                       ),
                     ),
                   ],
-                  if (onOpenMp != null) ...[
+                  if (onOpenConstituency != null || onOpenMp != null) ...[
                     const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: FilledButton.tonalIcon(
-                        onPressed: onOpenMp,
-                        icon: const Icon(Icons.person_outline, size: 18),
-                        label: const Text('MP details'),
-                      ),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (onOpenConstituency != null)
+                          FilledButton.tonalIcon(
+                            onPressed: onOpenConstituency,
+                            icon: const Icon(Icons.how_to_vote_outlined,
+                                size: 18),
+                            label: const Text('Constituency'),
+                          ),
+                        if (onOpenMp != null)
+                          FilledButton.tonalIcon(
+                            onPressed: onOpenMp,
+                            icon: const Icon(Icons.person_outline, size: 18),
+                            label: const Text('MP details'),
+                          ),
+                      ],
                     ),
                   ],
                 ],

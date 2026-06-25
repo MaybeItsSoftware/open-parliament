@@ -85,4 +85,80 @@ void main() {
       expect(controlDisplayName('NOC'), 'No overall control');
     });
   });
+
+  group('historical parsing', () {
+    test('parseHistoricalCouncils16 parses name, total, seats, and calculates control', () {
+      const html16 = '''
+        <table>
+          <tr><td>Adur</td><td>29</td><td>
+            <div class="stacked-bar-graph">
+              <span class="pop con" style="width: 50%"><span class="poptext">17</span></span>
+              <span class="pop lab" style="width: 50%"><span class="poptext">8</span></span>
+              <span class="pop ind" style="width: 0%"><span class="poptext">4</span></span>
+            </div>
+          </td></tr>
+        </table>
+      ''';
+      final councils = parseHistoricalCouncils16(html16);
+      expect(councils.length, 1);
+      final adur = councils.first;
+      expect(adur.name, 'Adur');
+      expect(adur.total, 29);
+      expect(adur.seats['Con'], 17);
+      expect(adur.seats['Lab'], 8);
+      expect(adur.seats['Oth'], 4);
+      expect(adur.control, 'CON'); // calculated majority
+    });
+
+    test('parseHistoricalCouncils73 parses name, control, total, and seats', () {
+      const html73 = '''
+        <table>
+          <tr><td>Adur</td><td>Con</td><td>29</td><td>
+            <div class="stacked-bar-graph">
+              <span class="pop con" style="width: 50%"><span class="poptext">20</span></span>
+              <span class="pop lab" style="width: 50%"><span class="poptext">1</span></span>
+              <span class="pop ind" style="width: 0%"><span class="poptext">8</span></span>
+            </div>
+          </td></tr>
+        </table>
+      ''';
+      final councils = parseHistoricalCouncils73(html73);
+      expect(councils.length, 1);
+      final adur = councils.first;
+      expect(adur.name, 'Adur');
+      expect(adur.control, 'Con'); // parsed directly
+      expect(adur.total, 29);
+      expect(adur.seats['Con'], 20);
+      expect(adur.seats['Lab'], 1);
+      expect(adur.seats['Oth'], 8);
+    });
+
+    test('parseHistoricalCouncils73 maps vac to SNP for Scottish and PC for Welsh councils', () {
+      const html73 = '''
+        <table>
+          <tr><td>Aberdeen</td><td>NOC</td><td>43</td><td>
+            <div class="stacked-bar-graph">
+              <span class="pop vac" style="width: 50%"><span class="poptext">15</span></span>
+            </div>
+          </td></tr>
+          <tr><td>Conwy</td><td>NOC</td><td>55</td><td>
+            <div class="stacked-bar-graph">
+              <span class="pop vac" style="width: 50%"><span class="poptext">8</span></span>
+            </div>
+          </td></tr>
+        </table>
+      ''';
+      final councils = parseHistoricalCouncils73(html73);
+      expect(councils.length, 2);
+
+      final aberdeen = councils.firstWhere((c) => c.name == 'Aberdeen');
+      expect(aberdeen.seats['SNP'], 15);
+      expect(aberdeen.seats.containsKey('PC'), isFalse);
+
+      final conwy = councils.firstWhere((c) => c.name == 'Conwy');
+      expect(conwy.seats['PC'], 8);
+      expect(conwy.seats.containsKey('SNP'), isFalse);
+    });
+  });
 }
+

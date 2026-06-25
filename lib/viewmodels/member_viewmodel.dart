@@ -126,6 +126,7 @@ class MemberViewModel extends ChangeNotifier {
   final ParliamentaryDataService _service;
 
   bool _isLoading = true;
+  bool _disposed = false;
   String? _error;
   String? _constituency;
   int? _house; // 1 = Commons, 2 = Lords
@@ -195,7 +196,7 @@ class MemberViewModel extends ChangeNotifier {
   Future<void> load() async {
     _isLoading = true;
     _error = null;
-    notifyListeners();
+    _safeNotify();
 
     try {
       // Fire all three requests in parallel.
@@ -261,7 +262,7 @@ class MemberViewModel extends ChangeNotifier {
     }
 
     _isLoading = false;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Fetches the next page of voting history and appends it, deduping by
@@ -272,12 +273,12 @@ class MemberViewModel extends ChangeNotifier {
   Future<void> loadMoreVotes() async {
     if (_isLoadingMoreVotes || !_hasMoreVotes) return;
     _isLoadingMoreVotes = true;
-    notifyListeners();
+    _safeNotify();
     try {
       await _fetchNextVotesPage();
     } finally {
       _isLoadingMoreVotes = false;
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -322,4 +323,13 @@ class MemberViewModel extends ChangeNotifier {
         .toList();
   }
 
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 }

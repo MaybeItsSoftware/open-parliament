@@ -12,6 +12,7 @@ import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/member_viewmodel.dart';
 import 'bill_view.dart';
+import 'constituency_view.dart';
 import 'transcript_view.dart';
 import 'party_view.dart';
 
@@ -355,17 +356,46 @@ class _MemberViewState extends State<MemberView> {
             const SizedBox(height: 14),
           ],
           if (locationText != null) ...[
-            Row(
-              children: [
-                Icon(
-                  Icons.location_on_outlined,
-                  size: 16,
-                  color: theme.colorScheme.onSurfaceVariant,
+            // Commons MPs link through to the constituency's detail page; Lords
+            // have no constituency, so their line stays static.
+            if (!vm.isLord && vm.constituency?.isNotEmpty == true)
+              InkWell(
+                onTap: () => _openConstituency(context, vm),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        locationText,
+                        style: subtitleStyle?.copyWith(
+                          decoration: TextDecoration.underline,
+                          decorationColor: theme.colorScheme.onSurfaceVariant
+                              .withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right,
+                        size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  ],
                 ),
-                const SizedBox(width: 6),
-                Expanded(child: Text(locationText, style: subtitleStyle)),
-              ],
-            ),
+              )
+            else
+              Row(
+                children: [
+                  Icon(
+                    Icons.location_on_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(locationText, style: subtitleStyle)),
+                ],
+              ),
             const SizedBox(height: 8),
           ],
           if (vm.membershipStartDate != null)
@@ -788,6 +818,19 @@ class _MemberViewState extends State<MemberView> {
   }
 
   // ─── Navigation ───────────────────────────────────────────────────────────
+
+  void _openConstituency(BuildContext context, MemberViewModel vm) {
+    final name = vm.constituency;
+    if (name == null || name.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ConstituencyView(
+          constituencyName: name,
+          member: vm.member,
+        ),
+      ),
+    );
+  }
 
   void _openPartyPage(BuildContext context, String partyName) {
     Navigator.of(context).push(

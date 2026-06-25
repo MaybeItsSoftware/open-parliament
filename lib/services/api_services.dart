@@ -4,12 +4,14 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 
 import '../models/debate.dart';
+import '../models/election_result.dart';
 import '../models/member.dart';
 import '../models/council.dart';
 import '../models/councillor.dart';
 import '../models/councillor_profile.dart';
 import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
+import '../utils/area_match.dart';
 import '../utils/council_control.dart';
 import '../utils/councillor_csv.dart';
 import '../utils/dc_match.dart';
@@ -119,6 +121,66 @@ class MembersApiService {
       if (response.statusCode != 200) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return (body['value'] as Map<String, dynamic>?) ?? body;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Base for the Location/Constituency endpoints (search + election results).
+  static const String _constituencyBaseUrl =
+      'https://members-api.parliament.uk/api/Location/Constituency';
+
+  /// Resolves a Westminster constituency name to its numeric id via the
+  /// Location search endpoint. Prefers an exact (normalised) name match,
+  /// otherwise falls back to the first result. Returns null on failure / miss.
+  Future<int?> fetchConstituencyId(String name) async {
+    final uri = Uri.parse('$_constituencyBaseUrl/Search').replace(
+      queryParameters: {'searchText': name, 'take': '10'},
+    );
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = body['items'] as List<dynamic>? ?? const [];
+      if (items.isEmpty) return null;
+
+      final target = normaliseName(name);
+      int? firstId;
+      for (final item in items) {
+        final value = (item as Map<String, dynamic>)['value']
+                as Map<String, dynamic>? ??
+            {};
+        final id = (value['id'] as num?)?.toInt();
+        if (id == null) continue;
+        firstId ??= id;
+        if (normaliseName((value['name'] as String?) ?? '') == target) {
+          return id;
+        }
+      }
+      return firstId;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetches the latest general-election result (winner, majority, turnout and
+  /// per-candidate votes) for a constituency. Returns null on failure.
+  Future<ConstituencyElectionResult?> fetchLatestElectionResult(
+    int constituencyId,
+  ) async {
+    final uri =
+        Uri.parse('$_constituencyBaseUrl/$constituencyId/ElectionResult/latest');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return ConstituencyElectionResult.fromJson(body);
     } catch (_) {
       return null;
     }
@@ -1127,9 +1189,16 @@ class CouncilControlApiService {
       : _client = client ?? http.Client();
 
   Future<List<Council>> fetchCouncils({int? year}) async {
-    final uri = year != null && year > 0
-        ? Uri.parse('https://opencouncildata.co.uk/councils.php?model=&y=$year')
-        : Uri.parse(_url);
+    final Uri uri;
+    if (year != null && year > 0) {
+      if (year >= 2016) {
+        uri = Uri.parse('https://opencouncildata.co.uk/historyYear16.php?y=$year');
+      } else {
+        uri = Uri.parse('https://opencouncildata.co.uk/historyYear73.php?y=$year');
+      }
+    } else {
+      uri = Uri.parse(_url);
+    }
     final response = await _client.get(
       uri,
       headers: {
@@ -1142,7 +1211,16 @@ class CouncilControlApiService {
         'Council control fetch failed (${response.statusCode}).',
       );
     }
-    final councils = parseCouncils(response.body);
+    final List<Council> councils;
+    if (year != null && year > 0) {
+      if (year >= 2016) {
+        councils = parseHistoricalCouncils16(response.body);
+      } else {
+        councils = parseHistoricalCouncils73(response.body);
+      }
+    } else {
+      councils = parseCouncils(response.body);
+    }
     if (councils.isEmpty) {
       throw const CouncilControlApiException(
         'Council control table was empty or unparseable.',
