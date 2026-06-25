@@ -95,6 +95,8 @@ jobs:
       - name: Build & upload to TestFlight
         run: bundle exec fastlane ios beta
         env:
+          # Monotonic build number so each TestFlight upload is unique/increasing.
+          BUILD_NUMBER: ${{ github.run_number }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
@@ -164,6 +166,8 @@ jobs:
       - name: Build & upload to Play (internal)
         run: bundle exec fastlane android beta
         env:
+          # Monotonic versionCode so each Play upload is unique/increasing.
+          BUILD_NUMBER: ${{ github.run_number }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
 
       # ── Upload debug symbols to Sentry ──

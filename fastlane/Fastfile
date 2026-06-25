@@ -14,6 +14,12 @@ ROOT = File.expand_path("..", __dir__)
 APP_ID = "uk.co.maybeitssoftware.openparliament"
 TEAM_ID = ENV["TEAM_ID"] || "6NQNU5YSC2"
 
+# CI injects a monotonically increasing build number (the GitHub run number) so
+# each upload's versionCode / CFBundleVersion is unique and increasing — the
+# stores reject re-uploads of an already-seen build. Locally the env var is
+# absent and the build number falls back to pubspec.yaml.
+BUILD_ARG = ENV["BUILD_NUMBER"] ? " --build-number=#{ENV['BUILD_NUMBER']}" : ""
+
 platform :ios do
   desc "Build a signed release IPA and upload it to TestFlight"
   lane :beta do
@@ -47,7 +53,7 @@ platform :ios do
       targets: ["Runner"],
     )
 
-    sh("cd #{ROOT} && flutter build ipa --release --export-options-plist=ios/ExportOptions.plist")
+    sh("cd #{ROOT} && flutter build ipa --release#{BUILD_ARG} --export-options-plist=ios/ExportOptions.plist")
 
     upload_to_testflight(
       api_key: api_key,
@@ -61,7 +67,7 @@ platform :android do
   desc "Build a signed release AAB and upload it to the Play internal track"
   lane :beta do
     # gradle reads android/key.properties (written by CI) to sign the bundle.
-    sh("cd #{ROOT} && flutter build appbundle --release")
+    sh("cd #{ROOT} && flutter build appbundle --release#{BUILD_ARG}")
 
     upload_to_play_store(
       package_name: APP_ID,
