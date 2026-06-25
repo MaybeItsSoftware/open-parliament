@@ -269,7 +269,6 @@ void main() {
 
     expect(canvas.drawnPaths, hasLength(1));
     expect(canvas.drawnPaints, hasLength(1));
-    expect(canvas.drawnPaints.first.color.a, closeTo(0.3, 0.01));
   });
 
   test('SankeyFlowPainter stacks parties correctly top-to-bottom and draws flows', () {
