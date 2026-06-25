@@ -227,5 +227,45 @@ void main() {
         throwsA(isA<HansardApiException>()),
       );
     });
+
+    test('fetchSittingCalendar parses ItemDate list into dates', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse([
+          {
+            'House': 'Commons',
+            'ItemDate': '2024-11-04T00:00:00',
+            'Metadata': null,
+          },
+          {
+            'House': 'Commons',
+            'ItemDate': '2024-11-05T00:00:00',
+            'Metadata': null,
+          },
+        ]),
+      ]);
+      final service = HansardApiService(client: stub);
+
+      final dates = await service.fetchSittingCalendar(2024, 11, 'Commons');
+
+      expect(dates, [DateTime(2024, 11, 4), DateTime(2024, 11, 5)]);
+    });
+
+    test('fetchSittingCalendar returns empty list on 404', () async {
+      final stub = _StubHttpClient([http.Response('', 404)]);
+      final service = HansardApiService(client: stub);
+      final dates = await service.fetchSittingCalendar(2024, 11, 'Commons');
+      expect(dates, isEmpty);
+    });
+
+    test('fetchSittingCalendar throws HansardApiException on non-404 error',
+        () async {
+      final stub = _StubHttpClient([http.Response('', 500)]);
+      final service = HansardApiService(client: stub);
+
+      await expectLater(
+        service.fetchSittingCalendar(2024, 11, 'Commons'),
+        throwsA(isA<HansardApiException>()),
+      );
+    });
   });
 }

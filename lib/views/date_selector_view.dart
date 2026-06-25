@@ -8,6 +8,7 @@ import '../services/parliamentary_data_service.dart';
 import '../utils/house_colors.dart';
 import '../utils/party_colors.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
+import '../widgets/sitting_day_calendar.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'transcript_view.dart';
@@ -23,7 +24,6 @@ class DateSelectorView extends StatefulWidget {
 class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
 
-  static final DateTime _minDate = DateTime(2000, 1, 1);
   static const double _minDebateCardHeight = 72;
   static const double _pixelsPerMinute = 3.5;
 
@@ -215,30 +215,23 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
   Future<void> _pickDate(DateSelectorViewModel vm, DateTime selectedDay) async {
     final now = DateTime.now();
-    final picked = await showDatePicker(
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showModalBottomSheet<DateTime>(
       context: context,
-      initialDate: selectedDay,
-      firstDate: _minDate,
-      lastDate: DateTime(now.year, now.month, now.day),
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => SittingDayCalendar(
+        viewModel: vm,
+        initialMonth: DateTime(selectedDay.year, selectedDay.month),
+        selectedDay: selectedDay,
+        lastDay: today,
+      ),
     );
     if (picked == null) return;
 
-    final chosenDay = DateTime(picked.year, picked.month, picked.day);
-    final nearest = await vm.nearestSittingDay(chosenDay);
-    if (nearest == null) {
-      if (!mounted) return;
-      _showInfoMessage('Parliament appears to be in recess around this date.');
-      return;
-    }
-    vm.setFocusedDay(nearest);
-    vm.selectDay(nearest);
-
-    if (!mounted) return;
-    if (!nearest.isAtSameMomentAs(chosenDay)) {
-      _showInfoMessage(
-        'No sitting on ${_friendlyDate(chosenDay)}. Showing ${_friendlyDate(nearest)} instead.',
-      );
-    }
+    // Only real sitting days are selectable, so the choice never needs snapping.
+    vm.setFocusedDay(picked);
+    vm.selectDay(picked);
   }
 
   Future<void> _shiftBySittingDay(

@@ -466,6 +466,48 @@ class HansardApiService {
     );
   }
 
+  /// Returns every sitting date in the given [month] of [year] for [house]
+  /// (`Commons` or `Lords`), in one request via `/overview/calendar.{format}`.
+  ///
+  /// The endpoint yields a list of `{House, ItemDate, Metadata}` objects; we
+  /// keep the dates (normalised to midnight). A 404 yields an empty list.
+  Future<List<DateTime>> fetchSittingCalendar(
+    int year,
+    int month,
+    String house,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/overview/calendar.json').replace(
+      queryParameters: {
+        'year': year.toString(),
+        'month': month.toString(),
+        'house': house,
+      },
+    );
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+
+    if (response.statusCode == 404) return const [];
+    if (response.statusCode != 200) {
+      throw HansardApiException(
+        'Failed to fetch sitting calendar for $year-$month ($house): '
+        'HTTP ${response.statusCode}',
+      );
+    }
+
+    final body = jsonDecode(response.body);
+    if (body is! List) return const [];
+    final dates = <DateTime>[];
+    for (final item in body) {
+      if (item is Map<String, dynamic>) {
+        final date = _parseSittingDate(item['ItemDate']);
+        if (date != null) dates.add(date);
+      }
+    }
+    return dates;
+  }
+
   /// Fetches recent Hansard contributions (speeches) for [memberId].
   ///
   /// Returns raw JSON result maps, newest first.  Returns an empty list on
