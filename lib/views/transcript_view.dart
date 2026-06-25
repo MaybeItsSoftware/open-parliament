@@ -15,6 +15,7 @@ import '../utils/house_colors.dart';
 import '../utils/parliament_live.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../utils/speaker_identity.dart';
+import '../utils/webview_background.dart';
 import '../viewmodels/transcript_viewmodel.dart';
 import '../widgets/speech_actions_sheet.dart';
 import '../widgets/speech_block.dart';
@@ -785,20 +786,13 @@ class _ParliamentLiveInlinePlayerState
     final controller = WebViewController.fromPlatformCreationParams(params);
     controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
             if (mounted) setState(() => _isLoading = true);
           },
           onPageFinished: (_) {
-            unawaited(
-              controller.runJavaScript(
-                "var style = document.createElement('style');"
-                "style.innerHTML = 'html, body { background: transparent !important; }';"
-                "(document.head || document.documentElement).appendChild(style);",
-              ),
-            );
+            unawaited(injectWebViewPageStyles(controller));
             if (_TranscriptViewState._isEventPageUrl(url)) {
               unawaited(
                 controller.runJavaScript(
@@ -811,6 +805,9 @@ class _ParliamentLiveInlinePlayerState
         ),
       );
     controller.loadRequest(url);
+    unawaited(
+      setWebViewBackgroundColor(controller, const Color(0x00000000)),
+    );
 
     if (controller.platform is AndroidWebViewController) {
       (controller.platform as AndroidWebViewController)
