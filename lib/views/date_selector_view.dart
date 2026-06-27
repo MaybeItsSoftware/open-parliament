@@ -86,7 +86,31 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                             ),
                             const SizedBox(height: 12),
                             Expanded(
-                              child: _buildDebatesFeed(vm, selectedDay),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onHorizontalDragEnd: (details) {
+                                  final velocity =
+                                      details.primaryVelocity ?? 0;
+                                  if (velocity > 300) {
+                                    unawaited(
+                                      _shiftBySittingDay(
+                                        vm,
+                                        selectedDay,
+                                        -1,
+                                      ),
+                                    );
+                                  } else if (velocity < -300) {
+                                    unawaited(
+                                      _shiftBySittingDay(
+                                        vm,
+                                        selectedDay,
+                                        1,
+                                      ),
+                                    );
+                                  }
+                                },
+                                child: _buildDebatesFeed(vm, selectedDay),
+                              ),
                             ),
                           ],
                         ),
