@@ -39,6 +39,9 @@ jobs:
       - name: Write .env
         run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
 
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+
       - name: Analyze code
         run: flutter analyze --fatal-infos
 

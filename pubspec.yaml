@@ -8,6 +8,10 @@ environment:
 
 dependencies:
   sentry_flutter: ^9.22.0
+  # Pulled in transitively by sentry_flutter, but the plain-Dart service layer
+  # (api_services.dart) imports the core `sentry` package directly rather than
+  # sentry_flutter so it keeps no Flutter-binding dependency.
+  sentry: ^9.22.0
   flutter:
     sdk: flutter
 
