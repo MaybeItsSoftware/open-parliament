@@ -8,8 +8,9 @@ Operational guide for AI coding agents working in this repository. Humans are we
 
 Public APIs consumed:
 
-- **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id) and `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
+- **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id), `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share), and `…/Members/Parties/StateOfTheParties/{house}/{date}` (party composition of a house on a date, used by the hemicycle seating view and party profile). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
 - **Hansard API** — debate sections + speeches per sitting day.
+- **Bills API** — `https://bills-api.parliament.uk/api/v1/Bills` — bill search/detail/stages/news and upcoming committee sittings, backing the Bills list/detail views and the debate-title → bill deep-link (`BillsApiService`).
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
 - **ONS Open Geography (ArcGIS)** — Westminster constituency and local-authority-district boundary polygons for the national control map (`BoundaryApiService`).
 - **OpenCouncilData** — two feeds. `https://opencouncildata.co.uk/councils.php` HTML table scraped for each council's political control (party / coalition / NOC); `parseCouncils` parses it. The `?y=<year>` parameter returns that year's historical composition (archive back to 1973), which drives the council page's control-history section; `CouncilControlService.loadCouncils({year})` caches each year in its own `councils_<year>.json` file so the current table is never overwritten. `https://opencouncildata.co.uk/csv2.php?y=<year>` is the free annual councillors CSV (name, ward, party — no contacts; those are a paid dataset); `parseCouncillors` parses it. Both cached on disk (30-day TTL) by `CouncilControlService` / `CouncillorService`. CC BY-SA 4.0, so attribute it in any UI that surfaces the data.
@@ -71,46 +72,105 @@ If you change DB schema, you **must** add an `onUpgrade` migration — never edi
 lib/
 ├── main.dart                 # App bootstrap, Provider wiring, theme
 ├── models/                   # Pure data classes; (de)serialise to/from API + SQLite
+│   ├── boundary.dart         # A map boundary polygon (constituency or council)
+│   ├── council.dart          # A local authority: control, seat composition
+│   ├── councillor.dart       # A ward councillor (name, ward, party)
+│   ├── councillor_profile.dart # Democracy Club enrichment (photo, email, links)
 │   ├── debate.dart           # A debate node (one or more speeches)
+│   ├── election_result.dart  # Latest general-election result for a constituency
 │   ├── member.dart           # MP profile (id, name, party, portrait)
+│   ├── parliament_live_event.dart # A parliamentlive.tv broadcast (guid, title)
+│   ├── party_stats.dart      # A party's current/historical seat count
+│   ├── saved_speech.dart     # A bookmarked speech (Settings → Saved)
 │   └── speech.dart           # A single contribution + procedural-row classifiers
 ├── services/
-│   ├── api_services.dart     # Low-level HTTP: MembersApiService, HansardApiService
+│   ├── api_services.dart     # Low-level HTTP: one *ApiService class per external API
+│   ├── boundary_service.dart # Loads/caches map boundary polygons (national map)
+│   ├── council_control_service.dart # Loads/caches council control (OpenCouncilData)
+│   ├── councillor_service.dart      # Loads/caches the national councillor roster
+│   ├── councillor_enrichment_service.dart # Lazily joins a councillor to Democracy Club
 │   ├── database_service.dart # Opens / migrates SQLite databases
 │   ├── parliamentary_data_service.dart  # Public facade. Use this from view-models.
+│   ├── party_service.dart    # Current + historical stats for a political party
 │   ├── theme_service.dart    # Persisted dark-mode toggle (shared_preferences)
-│   └── saved_speeches_service.dart  # App-wide bookmarked speeches (shared_preferences)
+│   ├── saved_speeches_service.dart  # App-wide bookmarked speeches (shared_preferences)
+│   └── startup_prefetch_service.dart # Persisted "prefetch latest content on launch" toggle
 ├── viewmodels/               # ChangeNotifier — one per primary screen
+│   ├── bill_viewmodel.dart          # Single bill: detail, stages, sponsors, news
+│   ├── bills_list_viewmodel.dart    # Recently-updated / coming-up bills feed
+│   ├── constituency_map_viewmodel.dart # National control map (constituencies + councils)
+│   ├── constituency_viewmodel.dart  # Latest election result for one seat
+│   ├── council_history_viewmodel.dart   # Per-year council control, paged back
 │   ├── date_selector_viewmodel.dart
-│   ├── transcript_viewmodel.dart  # Speech normalisation + speaker resolution
+│   ├── house_seating_viewmodel.dart # Hemicycle seating chart (state of the parties)
 │   ├── member_viewmodel.dart
-│   ├── constituency_viewmodel.dart      # Latest election result for one seat
-│   └── council_history_viewmodel.dart   # Per-year council control, paged back
+│   ├── party_viewmodel.dart         # Single party's current + historical seats
+│   ├── search_viewmodel.dart        # Debounced search across cached debate titles
+│   ├── settings_viewmodel.dart
+│   └── transcript_viewmodel.dart  # Speech normalisation + speaker resolution
 ├── views/                    # StatefulWidget screens, one per route
-│   ├── date_selector_view.dart    # Landing page — calendar of sitting days
-│   ├── transcript_view.dart       # Verbatim transcript for a sitting
-│   ├── member_view.dart           # MP profile + constituency map (constituency line → constituency_view)
+│   ├── app_drawer.dart            # Shared nav drawer linking the main views
+│   ├── bill_view.dart             # Detail page for a single bill
+│   ├── bills_list_view.dart       # Main view listing recently-updated bills
 │   ├── constituency_map_view.dart # National control map (constituencies + councils); drawer links to constituency_view / council_view / member_view
 │   ├── constituency_view.dart     # Constituency detail: sitting MP, boundary map, latest election result + vote split
 │   ├── council_view.dart          # Council detail: control, boundary map, seat breakdown, control-history graph (stacked seats-per-year columns), ward-grouped councillors (tap → councillor_view)
 │   ├── councillor_view.dart       # Single councillor profile: party, ward, council, next election, web search; lazily enriched with a Democracy Club photo, email, links & "first elected"
-│   └── settings_view.dart
+│   ├── date_selector_view.dart    # Landing page — calendar of sitting days
+│   ├── house_seating_view.dart    # Hemicycle seating chart for a house/date
+│   ├── member_view.dart           # MP profile + constituency map (constituency line → constituency_view)
+│   ├── parliament_live_view.dart  # Full-screen parliamentlive.tv playback
+│   ├── party_view.dart            # Single party's profile (current + historical seats)
+│   ├── saved_speeches_view.dart   # Bookmarked speeches (Settings → Saved)
+│   ├── search_view.dart           # Search across cached debate titles
+│   ├── settings_view.dart
+│   └── transcript_view.dart       # Verbatim transcript for a sitting
 ├── widgets/
 │   ├── speech_block.dart     # Renders all speech-row variants (named, procedural,
 │   │                         # division, in-the-Chair, committee roster, …)
+│   ├── speech_block/         # Sub-widgets speech_block.dart delegates to per variant
+│   │   ├── committee_roster_card.dart
+│   │   ├── division_result_card.dart
+│   │   ├── in_chair_banner.dart
+│   │   └── speaker_contribution_card.dart
 │   ├── control_split_bar.dart # Reusable stacked party-split bar (council seats,
 │   │                         # constituency vote share)
-│   └── council_control_history_chart.dart # Stacked seats-per-year graph (fills
-│                             # width, else scrolls); columns sized from seat sums
-└── utils/
-    └── party_colors.dart     # Canonical party tokens + brand colours
+│   ├── council_control_history_chart.dart # Stacked seats-per-year graph (fills
+│   │                         # width, else scrolls); columns sized from seat sums
+│   ├── sitting_day_calendar.dart # Bottom-sheet calendar picker for a sitting day
+│   └── speech_actions_sheet.dart # Long-press sheet: save / copy / share a speech
+└── utils/                    # Pure helpers (no Flutter, no I/O)
+    ├── area_match.dart       # Fuzzy name matching for constituencies/councils
+    ├── committee_roster.dart # Merges committee-membership preamble rows
+    ├── council_control.dart  # Parses OpenCouncilData's HTML control table
+    ├── councillor_csv.dart   # Parses OpenCouncilData's councillors CSV
+    ├── dc_match.dart         # Matches an OpenCouncilData councillor to a DC person
+    ├── geojson_boundaries.dart # Parses ArcGIS GeoJSON into BoundaryPolygon models
+    ├── house_colors.dart     # House-style brand colours (Commons/Lords/etc.)
+    ├── map_tiles.dart        # flutter_map_tile_caching store configuration
+    ├── member_lookup_index.dart # Fast id/name lookup over the cached member list
+    ├── parliament_live.dart  # Matches a Hansard debate title to a broadcast event
+    ├── party_colors.dart     # Canonical party tokens + brand colours
+    ├── party_tokens.dart     # Party name → canonical token normalisation
+    ├── seat_layout.dart      # Hemicycle seat position layout algorithm
+    ├── speaker_identity.dart # Office-title parsing for speaker alias resolution
+    ├── speech_normaliser.dart # Timestamp/date-heading/announcement stripping rules
+    ├── speech_share.dart     # Formats a speech for the native share sheet
+    ├── speech_timecodes.dart # Interpolates a speech's clock time from anchors
+    └── webview_background.dart # Transparent-background workarounds for the embedded player
 
 test/
 ├── models/        # Pure parsing / classifier tests
 ├── services/      # API parsing tests with fake http.Client
-├── viewmodels/    # ChangeNotifier tests with fake services
+├── utils/         # Pure helper tests
+├── viewmodels/    # ChangeNotifier tests with fake services (all viewmodels except
+│                  # party_viewmodel.dart and settings_viewmodel.dart — see below)
+├── views/         # Targeted view tests (currently parliament_live_view only)
+├── widgets/       # Widget tests for non-trivial reusable widgets
 └── widget_test.dart  # Top-level smoke test
 ```
+
+Note: `services/`, `models/`, and most `widgets/` files above have no dedicated test file yet — see [Testing](#testing).
 
 ### Where to add things
 
@@ -142,7 +202,9 @@ The suite is fast (≈1 second). Aim to add a test alongside any non-trivial cha
 - **Models** — round-trip parsing (API JSON → model → DB row → model) and classifier flags (`Speech.isDivision`, `isPrayers`, `isCollectiveSpeaker`, …).
 - **Services** — `MembersApiService` and `HansardApiService` are tested with an injected fake `http.Client`. Don't hit the real network in tests.
 - **View-models** — covered by a `FakeParliamentaryDataService` style fake. Tests should verify: state transitions (`isLoading`, `error`, `speeches`), normalisation rules (timestamp removal, redundant-date stripping, committee roster merging), and `notifyListeners()` semantics around `dispose()`.
-- **Widgets** — currently only a top-level smoke test. Widget tests are welcome for non-trivial new widgets, but golden tests are not yet adopted.
+- **Widgets** — currently only a top-level smoke test plus a handful of targeted widget tests (`test/widgets/`). Widget tests are welcome for non-trivial new widgets, but golden tests are not yet adopted.
+
+**Known coverage gap:** `parliamentary_data_service.dart` (the facade every view-model depends on) and the services it composes (`database_service.dart`, `boundary_service.dart`, `council_control_service.dart`, `councillor_service.dart`, `councillor_enrichment_service.dart`, `party_service.dart`) have no dedicated tests — only the lower-level `*ApiService` HTTP parsing is covered. This is the riskiest untested layer (caching TTL logic, SQLite transactions, `onUpgrade` migrations); testing it needs `sqflite_common_ffi` (or an in-memory equivalent) since `sqflite` needs a real platform channel. `party_viewmodel.dart` and `settings_viewmodel.dart` are also outside `viewmodel_test.dart`'s coverage. Worth closing before making non-trivial changes to any of these.
 
 Run with `flutter test`. A single file: `flutter test test/viewmodels/viewmodel_test.dart`.
 

@@ -288,8 +288,12 @@ class _CouncillorViewState extends State<CouncillorView> {
   }
 
   Future<void> _launch(BuildContext context, String url) async {
-    final ok =
-        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    // `url` can come from Democracy Club (councillor social links), a
+    // third-party source we don't validate — guard against a malformed URL
+    // rather than letting Uri.parse throw out of this tap handler.
+    final uri = Uri.tryParse(url);
+    final ok = uri != null &&
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open that link.')),

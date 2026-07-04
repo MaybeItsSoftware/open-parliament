@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:http/http.dart' as http;
+import 'package:sentry/sentry.dart';
 
 import '../models/debate.dart';
 import '../models/election_result.dart';
@@ -15,6 +16,29 @@ import '../utils/area_match.dart';
 import '../utils/council_control.dart';
 import '../utils/councillor_csv.dart';
 import '../utils/dc_match.dart';
+
+/// Upper bound on a single request across the lightweight, best-effort API
+/// clients in this file (everything except [BoundaryApiService], which has
+/// its own longer timeout + retry tuned for the ArcGIS gateway). Without
+/// this, a stalled connection to any Parliament API left the caller's
+/// `isLoading` state spinning forever instead of surfacing an error.
+const Duration _defaultHttpTimeout = Duration(seconds: 20);
+
+/// Adds a bounded-time `get` to [http.Client] so every call site below gets
+/// the same timeout without repeating `.timeout(...)` everywhere.
+extension _TimedHttpGet on http.Client {
+  Future<http.Response> getTimed(Uri url, {Map<String, String>? headers}) {
+    return get(url, headers: headers).timeout(_defaultHttpTimeout);
+  }
+}
+
+/// Reports a failure that a caller is about to swallow (returning an empty
+/// list / null fallback) so it's still visible in Sentry instead of vanishing
+/// entirely. A no-op when Sentry hasn't been initialised (e.g. in tests or
+/// local runs without a DSN), since the SDK no-ops until `Sentry.init` runs.
+void _reportSilentFailure(Object error, StackTrace stackTrace) {
+  unawaited(Sentry.captureException(error, stackTrace: stackTrace));
+}
 
 /// Low-level HTTP client for the official Parliament Members API.
 ///
@@ -39,7 +63,7 @@ class MembersApiService {
       final uri = Uri.parse(
         '$_baseUrl/Search?skip=$skip&take=$pageSize&IsCurrentMember=true',
       );
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -88,7 +112,7 @@ class MembersApiService {
       },
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {
           'Accept': 'application/json',
@@ -103,7 +127,8 @@ class MembersApiService {
       final lon = double.tryParse((first['lon'] as String?) ?? '');
       if (lat == null || lon == null) return null;
       return [lat, lon];
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -114,14 +139,15 @@ class MembersApiService {
   Future<Map<String, dynamic>?> fetchMemberDetail(int id) async {
     final uri = Uri.parse('$_baseUrl/$id');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
       if (response.statusCode != 200) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return (body['value'] as Map<String, dynamic>?) ?? body;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -138,7 +164,7 @@ class MembersApiService {
       queryParameters: {'searchText': name, 'take': '10'},
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -161,7 +187,8 @@ class MembersApiService {
         }
       }
       return firstId;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -174,14 +201,15 @@ class MembersApiService {
     final uri =
         Uri.parse('$_constituencyBaseUrl/$constituencyId/ElectionResult/latest');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
       if (response.statusCode != 200) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return ConstituencyElectionResult.fromJson(body);
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -192,14 +220,15 @@ class MembersApiService {
   Future<Map<String, dynamic>?> fetchMemberBiography(int id) async {
     final uri = Uri.parse('$_baseUrl/$id/Biography');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
       if (response.statusCode != 200) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return (body['value'] as Map<String, dynamic>?) ?? body;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -222,7 +251,7 @@ class MembersApiService {
       },
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -235,7 +264,8 @@ class MembersApiService {
               (item['value'] as Map<String, dynamic>?) ?? const <String, dynamic>{})
           .where((value) => value.isNotEmpty)
           .toList();
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -252,7 +282,7 @@ class MembersApiService {
         '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     final uri = Uri.parse('$_baseUrl/Parties/StateOfTheParties/$house/$dateStr');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -263,7 +293,8 @@ class MembersApiService {
           .whereType<Map<String, dynamic>>()
           .map((item) => (item['value'] as Map<String, dynamic>?) ?? item)
           .toList();
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -304,7 +335,7 @@ class HansardApiService {
       ).replace(
         queryParameters: {'house': currentHouse, 'date': date},
       );
-      final sectionsResponse = await _client.get(
+      final sectionsResponse = await _client.getTimed(
         sectionsUri,
         headers: {'Accept': 'application/json'},
       );
@@ -335,7 +366,7 @@ class HansardApiService {
             'section': section,
           },
         );
-        final treeResponse = await _client.get(
+        final treeResponse = await _client.getTimed(
           treeUri,
           headers: {'Accept': 'application/json'},
         );
@@ -394,7 +425,7 @@ class HansardApiService {
     String debateTitle,
   ) async {
     final uri = Uri.parse('$_baseUrl/debates/debate/$debateId.json');
-    final response = await _client.get(
+    final response = await _client.getTimed(
       uri,
       headers: {'Accept': 'application/json'},
     );
@@ -486,7 +517,7 @@ class HansardApiService {
       ).replace(
         queryParameters: {'house': currentHouse, 'date': date},
       );
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -545,7 +576,7 @@ class HansardApiService {
         'house': house,
       },
     );
-    final response = await _client.get(
+    final response = await _client.getTimed(
       uri,
       headers: {'Accept': 'application/json'},
     );
@@ -587,7 +618,7 @@ class HansardApiService {
       },
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -595,7 +626,8 @@ class HansardApiService {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final results = (body['Results'] as List<dynamic>?) ?? [];
       return results.whereType<Map<String, dynamic>>().toList();
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -716,12 +748,13 @@ class ParliamentLiveApiService {
     );
 
     try {
-      final response = await _client.get(uri);
+      final response = await _client.getTimed(uri);
       if (response.statusCode != 200) return const [];
       final events = parseSearchHtml(response.body);
       _cache[date] = events;
       return events;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -787,7 +820,7 @@ class BillsApiService {
     );
 
     try {
-      final response = await _client.get(uri);
+      final response = await _client.getTimed(uri);
       if (response.statusCode != 200) return _cache[query] = null;
       final body = json.decode(response.body);
       final items = (body is Map<String, dynamic>) ? body['items'] : null;
@@ -804,7 +837,8 @@ class BillsApiService {
         if (shortTitle == normalizedQuery) return _cache[query] = id;
       }
       return _cache[query] = fallbackId;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return _cache[query] = null;
     }
   }
@@ -822,7 +856,7 @@ class BillsApiService {
         'Take': take.toString(),
       },
     );
-    final response = await _client.get(
+    final response = await _client.getTimed(
       uri,
       headers: {'Accept': 'application/json'},
     );
@@ -844,7 +878,7 @@ class BillsApiService {
 
     final uri = Uri.parse('https://bills-api.parliament.uk/api/v1/BillTypes');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -855,7 +889,8 @@ class BillsApiService {
       final list = items.whereType<Map<String, dynamic>>().toList();
       _billTypesCache = list;
       return list;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -870,7 +905,7 @@ class BillsApiService {
       },
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -879,7 +914,8 @@ class BillsApiService {
       final items = (body is Map<String, dynamic>) ? body['items'] : null;
       if (items is! List) return const [];
       return items.whereType<Map<String, dynamic>>().toList();
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
@@ -888,14 +924,15 @@ class BillsApiService {
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async {
     final uri = Uri.parse('$_baseUrl/$id');
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
       if (response.statusCode != 200) return null;
       final body = json.decode(response.body);
       return body is Map<String, dynamic> ? body : null;
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
@@ -910,7 +947,7 @@ class BillsApiService {
       queryParameters: <String, String>{'Take': take.toString()},
     );
     try {
-      final response = await _client.get(
+      final response = await _client.getTimed(
         uri,
         headers: {'Accept': 'application/json'},
       );
@@ -919,17 +956,66 @@ class BillsApiService {
       final items = (body is Map<String, dynamic>) ? body['items'] : null;
       if (items is! List) return const [];
       return items.whereType<Map<String, dynamic>>().toList();
-    } catch (_) {
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
   }
 
   /// Fetches recent news articles / updates for a bill, newest first. Empty on
   /// failure.
-  Future<List<Map<String, dynamic>>> fetchBillNews(int id, {int take = 20}) async { final uri = Uri.parse("$_baseUrl/$id/NewsArticles").replace(queryParameters: <String, String>{"Take": take.toString()}); try { final response = await _client.get(uri, headers: {"Accept": "application/json"}); if (response.statusCode != 200) return const []; final body = json.decode(response.body); final items = (body is Map<String, dynamic>) ? body["items"] : null; if (items is! List) return const []; return items.whereType<Map<String, dynamic>>().toList(); } catch (_) { return const []; } }
+  Future<List<Map<String, dynamic>>> fetchBillNews(
+    int id, {
+    int take = 20,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/$id/NewsArticles').replace(
+      queryParameters: <String, String>{'Take': take.toString()},
+    );
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List) return const [];
+      return items.whereType<Map<String, dynamic>>().toList();
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return const [];
+    }
+  }
 
   /// Fetches upcoming bill sittings from `DateFrom` (defaults to today).
-  Future<List<Map<String, dynamic>>> fetchComingUpSittings({String? dateFrom, int skip = 0, int take = 50}) async { final start = dateFrom ?? DateTime.now().toIso8601String().split("T")[0]; final uri = Uri.parse("https://bills-api.parliament.uk/api/v1/Sittings").replace(queryParameters: <String, String>{"DateFrom": start, "Take": take.toString()}); try { final response = await _client.get(uri, headers: {"Accept": "application/json"}); if (response.statusCode != 200) return const []; final body = json.decode(response.body); final items = (body is Map<String, dynamic>) ? body["items"] : null; if (items is! List) return const []; return items.whereType<Map<String, dynamic>>().toList(); } catch (_) { return const []; } }
+  Future<List<Map<String, dynamic>>> fetchComingUpSittings({
+    String? dateFrom,
+    int skip = 0,
+    int take = 50,
+  }) async {
+    final start = dateFrom ?? DateTime.now().toIso8601String().split('T')[0];
+    final uri = Uri.parse('https://bills-api.parliament.uk/api/v1/Sittings')
+        .replace(
+      queryParameters: <String, String>{
+        'DateFrom': start,
+        'Take': take.toString(),
+      },
+    );
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body);
+      final items = (body is Map<String, dynamic>) ? body['items'] : null;
+      if (items is! List) return const [];
+      return items.whereType<Map<String, dynamic>>().toList();
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return const [];
+    }
+  }
 
   void dispose() => _client.close();
 }
@@ -1199,7 +1285,7 @@ class CouncilControlApiService {
     } else {
       uri = Uri.parse(_url);
     }
-    final response = await _client.get(
+    final response = await _client.getTimed(
       uri,
       headers: {
         'Accept': 'text/html',
@@ -1270,14 +1356,15 @@ class CouncillorApiService {
   Future<List<Councillor>> _fetchYear(int year) async {
     final http.Response response;
     try {
-      response = await _client.get(
+      response = await _client.getTimed(
         Uri.parse(_url(year)),
         headers: {
           'Accept': 'text/csv',
           'User-Agent': 'open-hansard/1.0',
         },
       );
-    } on Object {
+    } on Object catch (e, st) {
+      _reportSilentFailure(e, st);
       return const [];
     }
     if (response.statusCode != 200) return const [];
@@ -1357,10 +1444,11 @@ class DemocracyClubApiService {
     for (var page = 0; page < _maxBallotPages; page++) {
       final Map<String, dynamic> body;
       try {
-        final response = await _client.get(uri);
+        final response = await _client.getTimed(uri);
         if (response.statusCode != 200) return;
         body = jsonDecode(response.body) as Map<String, dynamic>;
-      } on Object {
+      } on Object catch (e, st) {
+        _reportSilentFailure(e, st);
         return;
       }
       for (final ballot in (body['results'] as List<dynamic>? ?? const [])) {
@@ -1393,11 +1481,12 @@ class DemocracyClubApiService {
   Future<CouncillorProfile?> fetchPerson(int personId) async {
     try {
       final response = await _client
-          .get(Uri.parse('$_baseUrl/people/$personId/?format=json'));
+          .getTimed(Uri.parse('$_baseUrl/people/$personId/?format=json'));
       if (response.statusCode != 200) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return CouncillorProfile.fromPersonJson(body);
-    } on Object {
+    } on Object catch (e, st) {
+      _reportSilentFailure(e, st);
       return null;
     }
   }
