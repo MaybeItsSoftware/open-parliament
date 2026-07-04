@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v1.0.0...v1.1.0) (2026-07-04)
+
+
+### Features
+
+* bump iOS minimum deployment target to 13.0 and update project for Flutter 3.44 ([ff1d60d](https://github.com/MaybeItsSoftware/open-parliament/commit/ff1d60db28e1b6af27331dcf8058f96e907ff7eb))
+
 # 1.0.0 (2026-06-25)
 
 
