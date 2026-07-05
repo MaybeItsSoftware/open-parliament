@@ -1,3 +1,10 @@
+## [0.3.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.0...v0.3.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* **android:** use draft release_status for the first alpha promotion ([af4511f](https://github.com/MaybeItsSoftware/open-parliament/commit/af4511f2ac6254da18c15bf73c12819db53a632a))
+
 # [0.3.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.2.1...v0.3.0) (2026-07-05)
 
 
