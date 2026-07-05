@@ -17,22 +17,22 @@
          │                                                      │
          │                                         ┌────────────┼────────────┐
          ▼                                         ▼            ▼            ▼
-  ┌─────────────┐                           ┌──────────┐ ┌──────────┐ ┌──────────┐
-  │ 1. Commit   │                           │  iOS     │ │  iOS     │ │ Android  │
-  │    (see     │                           │ internal │ │ external │ │ internal │
-  │    table)   │                           └────┬─────┘ └────┬─────┘ └────┬─────┘
-  └──────┬──────┘                               │            │            │
-         │                                      │            │            │
-         ▼                                      ▼            ▼            ▼
-  ┌─────────────┐                     App Store Connect  TestFlight   Play Console
-  │ 2. Push to  │                     → Users & Access  → Groups     → Internal
-  │    main     │                     → add as          → create     │  testing
-  └──────┬──────┘                       team member       group      → Testers tab
-         │                                                → add       → add emails
-         ▼                                                  testers
-  ┌────────────────────────────────────────┐      Then add to Fastfile:
-  │ CI runs automatically:                 │        distribute_external: true
-  │  release.yml                           │        groups: ["Your Group Name"]
+  ┌─────────────┐                           ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ 1. Commit   │                           │  iOS     │ │  iOS     │ │ Android  │ │ Android  │
+  │    (see     │                           │ internal │ │ external │ │ internal │ │ closed   │
+  │    table)   │                           └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘
+  └──────┬──────┘                               │            │            │            │
+         │                                      │            │            │            │
+         ▼                                      ▼            ▼            ▼            ▼
+  ┌─────────────┐                     App Store Connect  TestFlight   Play Console  Play Console
+  │ 2. Push to  │                     → Users & Access  → Groups     → Internal    → Testing →
+  │    main     │                     → add as          → create     │  testing   Closed testing
+  └──────┬──────┘                       team member       group      → Testers tab → Alpha track
+         │                                                → add       → add emails  → add emails
+         ▼                                                  testers                (already wired
+  ┌────────────────────────────────────────┐      Then add to Fastfile:            into every beta
+  │ CI runs automatically:                 │        distribute_external: true      deploy — nothing
+  │  release.yml                           │        groups: ["Your Group Name"]    to add to Fastfile)
   │   ├─ tests pass                        │
   │   └─ semantic-release bumps version    │
   │       creates git tag (e.g. v0.2.0)   │
@@ -40,8 +40,10 @@
   │  deploy.yml (runs after release.yml     │
   │  finishes; only proceeds if a new tag  │
   │  was actually created — see below)     │
-  │   ├─ iOS  → TestFlight                 │
-  │   └─ Android → Play internal track     │
+  │   ├─ iOS  → TestFlight (internal)       │
+  │   └─ Android → Play internal + closed  │
+  │       (alpha) testing track — both     │
+  │       get every beta build automatically│
   └────────────────────────────────────────┘
 
 

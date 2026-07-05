@@ -2,7 +2,7 @@
 #
 #   bundle exec fastlane ios beta       # build IPA → TestFlight (called by deploy.yml on tag)
 #   bundle exec fastlane ios release    # submit latest TestFlight build for App Store review
-#   bundle exec fastlane android beta   # build AAB → Play internal track
+#   bundle exec fastlane android beta   # build AAB → Play internal + closed (alpha) testing
 #   bundle exec fastlane android promote # promote internal → production
 #
 # Auth is via an App Store Connect API key (iOS) and a Play service account
@@ -95,7 +95,7 @@ platform :ios do
 end
 
 platform :android do
-  desc "Build a signed release AAB and upload it to the Play internal track"
+  desc "Build a signed release AAB and upload it to Play internal + closed (alpha) testing"
   lane :beta do
     sh("cd #{ROOT} && flutter build appbundle --release#{BUILD_ARG}")
 
@@ -109,6 +109,22 @@ platform :android do
       # uploads fast by skipping them here.
       skip_upload_metadata:  true,
       skip_upload_images:    true,
+      skip_upload_screenshots: true,
+    )
+
+    # Also make the same build available to the "Closed testing - Alpha" track
+    # (Play Console's UI label; the Play Developer API still calls it "alpha").
+    # No binary re-upload — just copies the just-uploaded internal release
+    # across to the alpha track.
+    upload_to_play_store(
+      package_name:            APP_ID,
+      track:                   "internal",
+      track_promote_to:        "alpha",
+      json_key_data:           ENV["PLAY_SERVICE_ACCOUNT_JSON"],
+      skip_upload_apk:         true,
+      skip_upload_aab:         true,
+      skip_upload_metadata:    true,
+      skip_upload_images:      true,
       skip_upload_screenshots: true,
     )
   end
