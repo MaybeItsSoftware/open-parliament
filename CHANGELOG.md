@@ -1,3 +1,16 @@
+# [0.2.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.1.0...v0.2.0) (2026-07-05)
+
+
+### Bug Fixes
+
+* **fastlane:** require BUILD_NUMBER env var instead of silently falling back ([cb66f6a](https://github.com/MaybeItsSoftware/open-parliament/commit/cb66f6a87cac5d1e31723be9323a70399e9f607d))
+* **release:** correct version baseline after erroneous 1.0.0/1.1.0 releases ([f8c7fa5](https://github.com/MaybeItsSoftware/open-parliament/commit/f8c7fa5e5f5fbccc454f140992057247b3fb813c))
+
+
+### Features
+
+* bump iOS minimum deployment target to 13.0 and update project for Flutter 3.44 ([ff1d60d](https://github.com/MaybeItsSoftware/open-parliament/commit/ff1d60db28e1b6af27331dcf8058f96e907ff7eb))
+
 # [1.1.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v1.0.0...v1.1.0) (2026-07-04)
 
 
