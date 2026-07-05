@@ -116,10 +116,18 @@ platform :android do
     # (Play Console's UI label; the Play Developer API still calls it "alpha").
     # No binary re-upload — just copies the just-uploaded internal release
     # across to the alpha track.
+    #
+    # release_status must be "draft" here: this app has never had a live
+    # release on a non-internal track, and until a human completes the
+    # first-ever rollout on this track from Play Console (pick countries,
+    # confirm policies, "Start rollout"), the API rejects "completed" with
+    # "Only releases with status draft may be created on draft app." Once
+    # that one-time manual rollout is done, this can switch to "completed".
     upload_to_play_store(
       package_name:            APP_ID,
       track:                   "internal",
       track_promote_to:        "alpha",
+      release_status:          "draft",
       json_key_data:           ENV["PLAY_SERVICE_ACCOUNT_JSON"],
       skip_upload_apk:         true,
       skip_upload_aab:         true,
