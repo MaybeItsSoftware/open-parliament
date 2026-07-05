@@ -1,3 +1,10 @@
+## [0.2.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.2.0...v0.2.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* **ci:** switch deploy.yml to workflow_run so it actually fires ([cf9cdc8](https://github.com/MaybeItsSoftware/open-parliament/commit/cf9cdc87182308a96e1acc75e937d984434d6b2e))
+
 # [0.2.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.1.0...v0.2.0) (2026-07-05)
 
 
