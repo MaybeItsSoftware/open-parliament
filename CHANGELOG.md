@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.2.1...v0.3.0) (2026-07-05)
+
+
+### Features
+
+* **android:** promote every beta build to closed (alpha) testing too ([b400fc4](https://github.com/MaybeItsSoftware/open-parliament/commit/b400fc482a64f44e443f1c46084f65c7129ce6e7))
+
 ## [0.2.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.2.0...v0.2.1) (2026-07-05)
 
 
