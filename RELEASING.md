@@ -104,11 +104,29 @@ Something broken?
 │       KEY_PASSWORD
 │       PLAY_STORE_SERVICE_ACCOUNT_JSON
 │
-└── Testers not seeing the build?
-    ├── iOS internal  → are they in App Store Connect team?
-    ├── iOS external  → has the first build of this version passed TestFlight review?
-    │                   (subsequent builds in the same version are instant)
-    └── Android       → are they added in Play Console → Internal testing → Testers?
+├── Testers not seeing the build?
+│   ├── iOS internal  → are they in App Store Connect team?
+│   ├── iOS external  → has the first build of this version passed TestFlight review?
+│   │                   (subsequent builds in the same version are instant)
+│   └── Android       → are they added in Play Console → Internal testing → Testers?
+│
+└── Version jumped way higher than expected (e.g. straight to 1.0.0/1.1.0)?
+    ├── Cause: semantic-release can't find any reachable vX.Y.Z tag in history,
+    │   so it defaults to 1.0.0 regardless of commit type. This happens if a
+    │   release tag was ever manually deleted/reset without pushing a correct
+    │   replacement tag in the same operation.
+    ├── release.yml now fails the release job in this situation instead of
+    │   silently shipping the wrong version — if you hit that error, fix the
+    │   tags (see below) before merging, don't just re-run.
+    ├── Never manually delete or move a vX.Y.Z release tag on its own — the
+    │   very next automated run has no baseline to compare against.
+    ├── Never `git commit --amend` a semantic-release bot commit
+    │   (`chore(release): ...`) — stack a new commit on top instead. Amending
+    │   it diverges your branch from origin/main's tagged commit.
+    └── To correct an already-wrong version: delete the bad tag(s) *and*
+        their GitHub Releases (`gh release delete vX.Y.Z --cleanup-tag`)
+        locally and on origin, leaving the real baseline tag as the highest
+        reachable one, then let the next merge re-derive the version.
 ```
 
 ---

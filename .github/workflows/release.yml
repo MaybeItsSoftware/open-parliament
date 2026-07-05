@@ -58,6 +58,17 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
+      - name: Verify a reachable release tag exists
+        # semantic-release silently releases 1.0.0 (ignoring commit types) when it
+        # can't find any reachable vX.Y.Z tag — this has bitten us twice (see
+        # RELEASING.md). Fail loudly instead so a lost/deleted tag is caught here,
+        # not discovered after a wrong version ships.
+        run: |
+          if ! git tag --merged HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::No reachable vX.Y.Z tag found in history — semantic-release would default to 1.0.0 instead of bumping from the real baseline. Fix the tags before merging (see RELEASING.md troubleshooting)."
+            exit 1
+          fi
+
       - name: Run Semantic Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
