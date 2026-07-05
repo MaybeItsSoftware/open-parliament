@@ -1,30 +1,68 @@
 name: Deploy to TestFlight & Play Store
 
-# Runs when semantic-release pushes a version tag (e.g. v0.2.0). At that point
-# pubspec.yaml already contains the bumped version, so the built binary is
-# labelled correctly. workflow_dispatch lets you re-run a deploy without a new
-# commit (useful after a flaky runner, certificate expiry, etc.).
+# Triggered when the Release workflow finishes on main, rather than on the tag
+# push itself: semantic-release pushes its tag using this workflow's
+# GITHUB_TOKEN, and GitHub never lets a GITHUB_TOKEN-authored push trigger
+# another `on: push` workflow (an anti-recursion guard) — so `on: push: tags:`
+# here would simply never fire. workflow_run has no such restriction, since it
+# watches the *Release* workflow's completion rather than a push event.
+#
+# Not every Release run cuts a new tag (e.g. a docs/chore-only merge), so
+# check-release below only lets the rest of the pipeline run if the commit
+# Release just left on main is actually tagged vX.Y.Z.
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [main]
+  # Allow a manual run from the Actions tab — useful for re-running a deploy
+  # without a new commit (useful after a flaky runner, certificate expiry, etc.).
   workflow_dispatch:
 
-# Only one deploy at a time; cancel in-progress runs if a new tag lands.
+# Only one deploy at a time; cancel in-progress runs if a new one lands.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: true
 
 env:
   FLUTTER_VERSION: '3.44.0'
 
 jobs:
+  # ─── Gate: only deploy if Release succeeded AND actually cut a new tag ───
+  check-release:
+    name: Check a release happened
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.check.outputs.released }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full tag history to check what's tagged at HEAD
+
+      - name: Was the commit Release just left on main tagged as a release?
+        id: check
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          elif git describe --tags --exact-match HEAD 2>/dev/null | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ─── Shared gate: analyse + test before building anything ───
   test:
     name: Pre-deploy checks
+    needs: check-release
+    if: needs.check-release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-release.outputs.sha }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -48,7 +86,7 @@ jobs:
   # ─── iOS: build IPA → upload to TestFlight (via Fastlane) ───
   deploy-ios:
     name: iOS → TestFlight
-    needs: test
+    needs: [check-release, test]
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -57,6 +95,8 @@ jobs:
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-release.outputs.sha }}
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -107,7 +147,7 @@ jobs:
   # ─── Android: build AAB → upload to Play Store (via Fastlane) ───
   deploy-android:
     name: Android → Play Store
-    needs: test
+    needs: [check-release, test]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -116,6 +156,8 @@ jobs:
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-release.outputs.sha }}
 
       - name: Set up Ruby + Fastlane
         uses: ruby/setup-ruby@v1

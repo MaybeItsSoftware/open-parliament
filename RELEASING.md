@@ -37,7 +37,9 @@
   │   └─ semantic-release bumps version    │
   │       creates git tag (e.g. v0.2.0)   │
   │                                        │
-  │  deploy.yml (triggered by tag)         │
+  │  deploy.yml (runs after release.yml     │
+  │  finishes; only proceeds if a new tag  │
+  │  was actually created — see below)     │
   │   ├─ iOS  → TestFlight                 │
   │   └─ Android → Play internal track     │
   └────────────────────────────────────────┘
@@ -127,6 +129,18 @@ Something broken?
         their GitHub Releases (`gh release delete vX.Y.Z --cleanup-tag`)
         locally and on origin, leaving the real baseline tag as the highest
         reachable one, then let the next merge re-derive the version.
+│
+└── deploy.yml never runs after a release?
+    ├── Cause: it can't trigger on the tag push directly. semantic-release
+    │   pushes the tag using release.yml's GITHUB_TOKEN, and GitHub never lets
+    │   a GITHUB_TOKEN-authored push trigger another `on: push` workflow (an
+    │   anti-recursion guard) — this silently ate every deploy from when
+    │   deploy.yml switched to a tag trigger until it was fixed to trigger off
+    │   `workflow_run: workflows: ["Release"]` instead, which isn't subject to
+    │   that restriction.
+    └── If it stops firing again, check the "check-release" job's logs first —
+        it's the gate that decides whether release.yml's run actually cut a
+        new vX.Y.Z tag worth deploying.
 ```
 
 ---
@@ -141,7 +155,7 @@ Tests + analysis pass
     │  ~1 min
     ▼
 semantic-release tags + bumps pubspec.yaml
-    │  triggers immediately
+    │  release.yml finishes → deploy.yml triggers automatically
     ▼
 deploy.yml starts
     │  ~20 min (iOS build on macos-15)
