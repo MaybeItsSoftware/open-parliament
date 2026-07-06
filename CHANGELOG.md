@@ -1,3 +1,10 @@
+## [0.3.2](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.1...v0.3.2) (2026-07-05)
+
+
+### Bug Fixes
+
+* **android:** upload+promote to alpha in a single edit to avoid a race ([6617b0f](https://github.com/MaybeItsSoftware/open-parliament/commit/6617b0fbd97eaec03ca77bc4a2dc1b00a1b16d43))
+
 ## [0.3.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.0...v0.3.1) (2026-07-05)
 
 
