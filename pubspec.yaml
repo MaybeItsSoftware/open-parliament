@@ -61,6 +61,8 @@ dev_dependencies:
   sentry_dart_plugin: ^3.4.0
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
   flutter_lints: ^3.0.0
   flutter_launcher_icons: ^0.14.3
 
@@ -74,6 +76,7 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+    - assets/branding/icon.png
 
 sentry:
   upload_debug_symbols: true

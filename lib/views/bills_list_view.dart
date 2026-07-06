@@ -57,7 +57,7 @@ class _BillsListViewState extends State<BillsListView> {
           children: [
             Icon(Icons.article_outlined),
             SizedBox(width: 8),
-            Text("Bills"),
+            Flexible(child: Text("Bills", overflow: TextOverflow.ellipsis)),
           ],
         ),
         actions: [

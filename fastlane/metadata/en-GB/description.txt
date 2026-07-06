@@ -1,0 +1,7 @@
+Open Parliament lets you read UK Parliamentary debates verbatim from Hansard.
+
+Features:
+- Read debates from the House of Commons and House of Lords.
+- Full offline support: search and read cached debates without an internet connection.
+- Track bills, member profiles, and voting records.
+- View live parliament broadcast schedules.
