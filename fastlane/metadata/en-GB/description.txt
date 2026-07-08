@@ -5,3 +5,12 @@ Features:
 - Full offline support: search and read cached debates without an internet connection.
 - Track bills, member profiles, and voting records.
 - View live parliament broadcast schedules.
+
+Data sources:
+This app displays public data retrieved live from the official UK Parliament APIs:
+- Hansard (debate transcripts): https://hansard-api.parliament.uk
+- Members API (MP and Lords profiles, voting records): https://members-api.parliament.uk
+- Bills API (bill stages and news): https://bills-api.parliament.uk
+- Parliament Live (broadcast schedules): https://parliamentlive.tv
+
+Disclaimer: Open Parliament is an independent, unofficial app. It is not affiliated with, endorsed by, or operated by the UK Parliament, the House of Commons, the House of Lords, or any UK government entity. For official government information, visit https://www.parliament.uk.

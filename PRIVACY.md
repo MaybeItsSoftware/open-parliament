@@ -2,7 +2,7 @@
 
 **Last Updated:** July 6, 2026
 
-This Privacy Policy explains how **Demopol Labs Ltd** ("we", "us", or "our"), a company registered in the United Kingdom, collects, uses, and protects your information when you use the **Open Hansard** mobile application (the "App").
+This Privacy Policy explains how **Demopol Labs Ltd** ("we", "us", or "our"), a company registered in the United Kingdom, collects, uses, and protects your information when you use the **Open Parliament** mobile application (the "App").
 
 We are committed to "Privacy by Design." The App is designed as a local-first application to read UK Parliamentary debates. We do not require you to register an account or log in to use the App.
 

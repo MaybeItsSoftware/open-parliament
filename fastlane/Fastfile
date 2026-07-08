@@ -92,6 +92,25 @@ platform :ios do
       export_compliance_uses_encryption: false,
     )
   end
+
+  desc "Download metadata and screenshots from App Store Connect"
+  lane :download_metadata do
+    api_key = app_store_connect_api_key(
+      key_id:                  ENV["ASC_KEY_ID"],
+      issuer_id:               ENV["ASC_ISSUER_ID"],
+      key_content:             ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64:   true,
+    )
+    deliver(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      metadata_path: File.join(__dir__, "metadata"),
+      screenshots_path: File.join(__dir__, "screenshots"),
+      skip_binary_upload: true,
+      force: true,
+      download_images: true
+    )
+  end
 end
 
 platform :android do
@@ -147,5 +166,11 @@ platform :android do
       # Optional staged rollout — start at 10 % and ramp via Play Console.
       # rollout: "0.1",
     )
+  end
+
+  desc "Download metadata and screenshots from Google Play Store"
+  lane :download_metadata do
+    # Note: supply init downloads metadata and screenshots
+    sh("bundle exec fastlane supply init --json_key_data '#{ENV["PLAY_SERVICE_ACCOUNT_JSON"]}' --metadata_path '#{File.join(__dir__, "metadata", "android")}'")
   end
 end

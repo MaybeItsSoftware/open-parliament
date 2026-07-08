@@ -23,9 +23,7 @@ Future<void> main() async {
   final sentryDsn = dotenv.env['SENTRY_DSN'] ?? '';
 
   final rootDirectory = await getApplicationSupportDirectory();
-  await FMTCObjectBoxBackend().initialise(
-    rootDirectory: rootDirectory.path,
-  );
+  await FMTCObjectBoxBackend().initialise(rootDirectory: rootDirectory.path);
   await const FMTCStore(cartoLightCacheName).manage.create();
   await const FMTCStore(cartoBaseCacheName).manage.create();
   await const FMTCStore(cartoLabelsCacheName).manage.create();
@@ -46,11 +44,12 @@ Future<void> main() async {
         options.environment = kDebugMode ? 'debug' : 'production';
         options.sendDefaultPii = false;
       },
-      appRunner: () => _startApp(
-        themeService: themeService,
-        savedSpeechesService: savedSpeechesService,
-        startupPrefetchService: startupPrefetchService,
-      ),
+      appRunner:
+          () => _startApp(
+            themeService: themeService,
+            savedSpeechesService: savedSpeechesService,
+            startupPrefetchService: startupPrefetchService,
+          ),
     );
   } else {
     // No DSN configured — run without Sentry (local development).
@@ -68,25 +67,29 @@ void _startApp({
   required SavedSpeechesService savedSpeechesService,
   required StartupPrefetchService startupPrefetchService,
 }) {
-  runApp(OpenHansardApp(
-    themeService: themeService,
-    savedSpeechesService: savedSpeechesService,
-    startupPrefetchService: startupPrefetchService,
-  ));
+  runApp(
+    OpenHansardApp(
+      themeService: themeService,
+      savedSpeechesService: savedSpeechesService,
+      startupPrefetchService: startupPrefetchService,
+    ),
+  );
   if (startupPrefetchService.prefetchOnStartup) {
-    unawaited(_prefetchLatestContent().catchError((error, stack) {
-      FlutterError.reportError(
-        FlutterErrorDetails(
-          exception: error,
-          stack: stack,
-          library: 'startup prefetch',
-        ),
-      );
-    }));
+    unawaited(
+      _prefetchLatestContent().catchError((error, stack) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'startup prefetch',
+          ),
+        );
+      }),
+    );
   }
 }
 
-/// Root widget for Open Hansard.
+/// Root widget for Open Parliament.
 ///
 /// The app is structured around a local-first data strategy:
 ///  - Member profiles are cached in 'members.db' and refreshed every 30 days.
@@ -117,41 +120,32 @@ class OpenHansardApp extends StatelessWidget {
           create: (_) => ParliamentaryDataService(),
           dispose: (_, service) => service.dispose(),
         ),
-        Provider<PartyService>(
-          create: (_) => PartyService(),
-        ),
+        Provider<PartyService>(create: (_) => PartyService()),
       ],
       child: Consumer<ThemeService>(
-        builder: (context, theme, _) => MaterialApp(
-          title: 'Open Parliament',
-          debugShowCheckedModeBanner: false,
-          themeMode: theme.themeMode,
-          navigatorObservers: [
-            SentryNavigatorObserver(),
-          ],
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF006B3C),
+        builder:
+            (context, theme, _) => MaterialApp(
+              title: 'Open Parliament',
+              debugShowCheckedModeBanner: false,
+              themeMode: theme.themeMode,
+              navigatorObservers: [SentryNavigatorObserver()],
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xFF006B3C),
+                ),
+                useMaterial3: true,
+                appBarTheme: const AppBarTheme(centerTitle: true, elevation: 2),
+              ),
+              darkTheme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xFF006B3C),
+                  brightness: Brightness.dark,
+                ),
+                useMaterial3: true,
+                appBarTheme: const AppBarTheme(centerTitle: true, elevation: 2),
+              ),
+              home: const DateSelectorView(),
             ),
-            useMaterial3: true,
-            appBarTheme: const AppBarTheme(
-              centerTitle: true,
-              elevation: 2,
-            ),
-          ),
-          darkTheme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF006B3C),
-              brightness: Brightness.dark,
-            ),
-            useMaterial3: true,
-            appBarTheme: const AppBarTheme(
-              centerTitle: true,
-              elevation: 2,
-            ),
-          ),
-          home: const DateSelectorView(),
-        ),
       ),
     );
   }
@@ -160,13 +154,10 @@ class OpenHansardApp extends StatelessWidget {
 Future<void> _prefetchLatestContent() async {
   final service = ParliamentaryDataService();
   try {
-    await Future.wait(
-      [
-        service.fetchRecentBills(skip: 0),
-        _prefetchLatestDebates(service),
-      ],
-      eagerError: false,
-    );
+    await Future.wait([
+      service.fetchRecentBills(skip: 0),
+      _prefetchLatestDebates(service),
+    ], eagerError: false);
   } finally {
     service.dispose();
   }
