@@ -34,31 +34,46 @@ void main() {
     );
   }
 
-  testWidgets('renders bars with real height even when council.total is 0',
-      (tester) async {
+  testWidgets(
+      'renders transparent tap-target footprints with real height even '
+      'when council.total is 0', (tester) async {
     await pump(tester, [
       year(2024, const {'Lab': 30, 'Con': 10}),
       year(2023, const {'Lab': 25, 'Con': 15}),
     ]);
 
-    // The tallest year (40 seats) should fill (nearly) the full chart height.
+    // The visible colour bands are painted by ControlHistoryRibbonPainter,
+    // not by ColoredBox any more — the boxes that remain are transparent
+    // tap-target footprints, preserving the Tooltip hit-test area.
     final boxes = find.descendant(
       of: find.byType(CouncilControlHistoryChart),
       matching: find.byType(ColoredBox),
     );
     expect(boxes, findsWidgets);
+    for (final element in boxes.evaluate()) {
+      final widget = element.widget as ColoredBox;
+      expect(widget.color, Colors.transparent);
+    }
 
-    // Bars must have BOTH real height and real width — a ColoredBox with no
-    // intrinsic width collapses to 0px wide unless the column stretches it,
-    // which is exactly the bug that left the chart blank on screen.
-    var sawRealBar = false;
+    // Footprints must have BOTH real height and real width — a ColoredBox
+    // with no intrinsic width collapses to 0px wide unless the column
+    // stretches it, which would silently break the tap target.
+    var sawRealFootprint = false;
     for (final element in boxes.evaluate()) {
       final size = element.size;
-      if (size != null && size.height > 1 && size.width > 1) sawRealBar = true;
+      if (size != null && size.height > 1 && size.width > 1) {
+        sawRealFootprint = true;
+      }
     }
-    expect(sawRealBar, isTrue,
-        reason: 'bars must have non-zero height AND width (regression: '
-            'invisible / zero-width bars)');
+    expect(sawRealFootprint, isTrue,
+        reason: 'tap-target footprints must have non-zero height AND width '
+            '(regression: invisible / zero-width tap targets)');
+
+    // The actual visual now lives entirely in the ribbon painter.
+    final customPaints =
+        tester.widgetList<CustomPaint>(find.byType(CustomPaint));
+    expect(customPaints.any((p) => p.painter is ControlHistoryRibbonPainter),
+        isTrue);
   });
 
   testWidgets('stretches to fill the width when few years are shown',
@@ -74,8 +89,8 @@ void main() {
     );
   });
 
-  testWidgets('renders bars inside an unbounded-height sliver context',
-      (tester) async {
+  testWidgets('renders tap-target footprints inside an unbounded-height '
+      'sliver context', (tester) async {
     // Mirrors the real placement: the chart lives in a SliverToBoxAdapter,
     // which hands its child UNBOUNDED height — the case a Center/SizedBox test
     // never exercises.
@@ -104,7 +119,8 @@ void main() {
     final real = boxes.evaluate().any(
         (e) => (e.size?.height ?? 0) > 1 && (e.size?.width ?? 0) > 1);
     expect(real, isTrue,
-        reason: 'bars must have height AND width in a sliver context');
+        reason: 'tap-target footprints must have height AND width in a '
+            'sliver context');
   });
 
   testWidgets('scrolls horizontally when too many years to fit', (tester) async {
@@ -121,7 +137,7 @@ void main() {
     );
   });
 
-  testWidgets('renders SankeyFlowPainter in both layouts', (WidgetTester tester) async {
+  testWidgets('renders ControlHistoryRibbonPainter in both layouts', (WidgetTester tester) async {
     const history = [
       CouncilYearControl(
         year: 2026,
@@ -159,8 +175,8 @@ void main() {
 
     expect(find.byType(CustomPaint), findsWidgets);
     var customPaints = tester.widgetList<CustomPaint>(find.byType(CustomPaint));
-    var hasSankey = customPaints.any((p) => p.painter is SankeyFlowPainter);
-    expect(hasSankey, isTrue, reason: 'SankeyFlowPainter should be rendered in stretched layout');
+    var hasSankey = customPaints.any((p) => p.painter is ControlHistoryRibbonPainter);
+    expect(hasSankey, isTrue, reason: 'ControlHistoryRibbonPainter should be rendered in stretched layout');
 
     // Layout 2: Scrollable (many years, narrow screen)
     final manyYears = [
@@ -190,12 +206,12 @@ void main() {
 
     expect(find.byType(CustomPaint), findsWidgets);
     customPaints = tester.widgetList<CustomPaint>(find.byType(CustomPaint));
-    hasSankey = customPaints.any((p) => p.painter is SankeyFlowPainter);
-    expect(hasSankey, isTrue, reason: 'SankeyFlowPainter should be rendered in scrollable layout');
+    hasSankey = customPaints.any((p) => p.painter is ControlHistoryRibbonPainter);
+    expect(hasSankey, isTrue, reason: 'ControlHistoryRibbonPainter should be rendered in scrollable layout');
   });
 
-  test('SankeyFlowPainter paints without error when history is empty', () {
-    final painter = SankeyFlowPainter(
+  test('ControlHistoryRibbonPainter paints without error when history is empty', () {
+    final painter = ControlHistoryRibbonPainter(
       years: [],
       order: [],
       maxTotal: 10,
@@ -206,15 +222,15 @@ void main() {
     expect(painter, isA<CustomPainter>());
   });
 
-  test('SankeyFlowPainter shouldRepaint returns true when fields change', () {
-    final painter1 = SankeyFlowPainter(
+  test('ControlHistoryRibbonPainter shouldRepaint returns true when fields change', () {
+    final painter1 = ControlHistoryRibbonPainter(
       years: [],
       order: const ['Lab'],
       maxTotal: 10,
       columnWidth: 20,
       columnGap: 6,
     );
-    final painter2 = SankeyFlowPainter(
+    final painter2 = ControlHistoryRibbonPainter(
       years: [],
       order: const ['Lab'],
       maxTotal: 10,
@@ -224,7 +240,7 @@ void main() {
     // When no fields change
     expect(painter1.shouldRepaint(painter2), isFalse);
 
-    final painter3 = SankeyFlowPainter(
+    final painter3 = ControlHistoryRibbonPainter(
       years: [],
       order: const ['Con'],
       maxTotal: 10,
@@ -234,7 +250,7 @@ void main() {
     expect(painter1.shouldRepaint(painter3), isTrue);
   });
 
-  test('SankeyFlowPainter draws paths between years with seats', () {
+  test('ControlHistoryRibbonPainter draws paths between years with seats', () {
     const y2023 = CouncilYearControl(
       year: 2023,
       council: Council(
@@ -256,7 +272,7 @@ void main() {
       ),
     );
 
-    final painter = SankeyFlowPainter(
+    final painter = ControlHistoryRibbonPainter(
       years: const [y2023, y2024],
       order: const ['Lab'],
       maxTotal: 10,
@@ -267,11 +283,43 @@ void main() {
     final canvas = TestCanvas();
     painter.paint(canvas, const Size(100, 100));
 
+    // One continuous path for the whole chart, not one per adjacent-year gap.
     expect(canvas.drawnPaths, hasLength(1));
     expect(canvas.drawnPaints, hasLength(1));
   });
 
-  test('SankeyFlowPainter stacks parties correctly top-to-bottom and draws flows', () {
+  test(
+      'ControlHistoryRibbonPainter draws exactly one path per party '
+      'regardless of year count', () {
+    CouncilYearControl y(int year) => CouncilYearControl(
+          year: year,
+          council: const Council(
+            name: 'Test',
+            type: 'District',
+            control: 'LAB',
+            seats: {'Lab': 10},
+            total: 10,
+          ),
+        );
+
+    final painter = ControlHistoryRibbonPainter(
+      years: [y(2021), y(2022), y(2023), y(2024)],
+      order: const ['Lab'],
+      maxTotal: 10,
+      columnWidth: 20,
+      columnGap: 6,
+    );
+
+    final canvas = TestCanvas();
+    painter.paint(canvas, const Size(200, 100));
+
+    // With the old "flow only between columns" model this would have been
+    // (years.length - 1) paths; the new model draws one seamless ribbon per
+    // party for the entire chart, so the count stays at order.length.
+    expect(canvas.drawnPaths, hasLength(1));
+  });
+
+  test('ControlHistoryRibbonPainter stacks parties correctly top-to-bottom and draws flows', () {
     const y2023 = CouncilYearControl(
       year: 2023,
       council: Council(
@@ -293,7 +341,7 @@ void main() {
       ),
     );
 
-    final painter = SankeyFlowPainter(
+    final painter = ControlHistoryRibbonPainter(
       years: const [y2023, y2024],
       order: const ['Con', 'Lab'],
       maxTotal: 40,
@@ -312,16 +360,19 @@ void main() {
     final conBounds = conPath.getBounds();
     final labBounds = labPath.getBounds();
 
-    // StartX = 20 (columnWidth). EndX = 26 (StartX + columnGap).
-    expect(conBounds.left, closeTo(20.0, 0.01));
-    expect(conBounds.right, closeTo(26.0, 0.01));
+    // Each party's ribbon now spans the whole chart edge-to-edge (0 to the
+    // last column's right edge — columnWidth(20) + columnGap(6) = 26 wide,
+    // so with 2 years the right edge is at 1*(20+6)+20 = 46), not just the
+    // old gap between fixed columns.
+    expect(conBounds.left, closeTo(0.0, 0.01));
+    expect(conBounds.right, closeTo(46.0, 0.01));
     // Con top in 2023 is 37.5. Con top in 2024 is 25.0. Minimum is 25.0.
     expect(conBounds.top, closeTo(25.0, 0.01));
     // Con bottom is 100 in both.
     expect(conBounds.bottom, closeTo(100.0, 0.01));
 
-    expect(labBounds.left, closeTo(20.0, 0.01));
-    expect(labBounds.right, closeTo(26.0, 0.01));
+    expect(labBounds.left, closeTo(0.0, 0.01));
+    expect(labBounds.right, closeTo(46.0, 0.01));
     // Lab top in 2023 is 0. Lab top in 2024 is 0. Minimum is 0.
     expect(labBounds.top, closeTo(0.0, 0.01));
     // Lab bottom in 2023 is 37.5. Lab bottom in 2024 is 25.0. Maximum is 37.5.
