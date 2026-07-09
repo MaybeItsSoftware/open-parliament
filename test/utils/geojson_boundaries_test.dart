@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:open_hansard/utils/geojson_boundaries.dart';
 
 void main() {
@@ -122,5 +123,129 @@ void main() {
     final boundaries = parseGeoJsonBoundaries(geojson);
     expect(boundaries, hasLength(1));
     expect(boundaries.single.outer, hasLength(4));
+  });
+
+  group('simplifyRing', () {
+    // A closed square with a redundant midpoint on each edge.
+    final square = [
+      const LatLng(0, 0),
+      const LatLng(0, 0.5),
+      const LatLng(0, 1),
+      const LatLng(0.5, 1),
+      const LatLng(1, 1),
+      const LatLng(1, 0.5),
+      const LatLng(1, 0),
+      const LatLng(0.5, 0),
+      const LatLng(0, 0),
+    ];
+
+    test('drops points within tolerance but keeps corners', () {
+      final simplified = simplifyRing(square, 0.01);
+      expect(simplified, [
+        const LatLng(0, 0),
+        const LatLng(0, 1),
+        const LatLng(1, 1),
+        const LatLng(1, 0),
+        const LatLng(0, 0),
+      ]);
+    });
+
+    test('keeps points that deviate more than the tolerance', () {
+      final ring = [
+        const LatLng(0, 0),
+        const LatLng(0.05, 0.5), // 0.05° off the 0→1 edge: beyond tolerance
+        const LatLng(0, 1),
+        const LatLng(1, 1),
+        const LatLng(1, 0),
+        const LatLng(0, 0),
+      ];
+      final simplified = simplifyRing(ring, 0.01);
+      expect(simplified, contains(const LatLng(0.05, 0.5)));
+    });
+
+    test('tolerance 0 returns the ring untouched', () {
+      expect(simplifyRing(square, 0), same(square));
+    });
+
+    test('stays closed: first and last points are always kept', () {
+      final simplified = simplifyRing(square, 0.01);
+      expect(simplified.first, simplified.last);
+    });
+
+    test('collapses sub-tolerance rings so the parser drops them', () {
+      final geojson = {
+        'type': 'FeatureCollection',
+        'features': [
+          {
+            'type': 'Feature',
+            'properties': {'name': 'Speck'},
+            'geometry': {
+              'type': 'MultiPolygon',
+              'coordinates': [
+                // A real square, 1° across…
+                [
+                  [
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [1.0, 1.0],
+                    [0.0, 1.0],
+                    [0.0, 0.0],
+                  ],
+                ],
+                // …and an island smaller than the tolerance, which must go.
+                [
+                  [
+                    [5.0, 5.0],
+                    [5.001, 5.0],
+                    [5.001, 5.001],
+                    [5.0, 5.001],
+                    [5.0, 5.0],
+                  ],
+                ],
+              ],
+            },
+          },
+        ],
+      };
+
+      final boundaries = parseGeoJsonBoundaries(geojson, simplifyTolerance: 0.01);
+      expect(boundaries, hasLength(1));
+      expect(boundaries.single.outer, hasLength(5));
+    });
+
+    test('simplifies holes as well as the outer ring', () {
+      final geojson = {
+        'type': 'FeatureCollection',
+        'features': [
+          {
+            'type': 'Feature',
+            'properties': {'name': 'Doughnut'},
+            'geometry': {
+              'type': 'Polygon',
+              'coordinates': [
+                [
+                  [0.0, 0.0],
+                  [3.0, 0.0],
+                  [3.0, 3.0],
+                  [0.0, 3.0],
+                  [0.0, 0.0],
+                ],
+                [
+                  [1.0, 1.0],
+                  [1.5, 1.0], // redundant midpoint on the hole's edge
+                  [2.0, 1.0],
+                  [2.0, 2.0],
+                  [1.0, 2.0],
+                  [1.0, 1.0],
+                ],
+              ],
+            },
+          },
+        ],
+      };
+
+      final boundaries = parseGeoJsonBoundaries(geojson, simplifyTolerance: 0.01);
+      expect(boundaries.single.holes.single, hasLength(5));
+    });
   });
 }

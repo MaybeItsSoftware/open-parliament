@@ -15,6 +15,16 @@ enum BoundaryType { constituency, council }
 class BoundaryService {
   static const Duration _cacheTtl = Duration(days: 180);
 
+  /// Client-side Douglas–Peucker tolerance (~55 m) applied when parsing.
+  ///
+  /// This matches the detail level requested from the server for
+  /// constituencies (crisp when zoomed in), so it is a near no-op there — but
+  /// the ArcGIS gateway ignores `maxAllowableOffset` for the council layer and
+  /// returns full-resolution coastline (~1.5M points), which janks projection
+  /// and rendering. Simplifying after parse bounds the point count no matter
+  /// what the server sends.
+  static const double _simplifyToleranceDegrees = 0.0005;
+
   final BoundaryApiService _api;
 
   BoundaryService({BoundaryApiService? api})
@@ -32,7 +42,11 @@ class BoundaryService {
           // and doing this on the UI isolate freezes the map while it loads.
           return await compute(
             parseGeoJsonString,
-            GeoJsonParseRequest(cached, _nameKey(type)),
+            GeoJsonParseRequest(
+              cached,
+              _nameKey(type),
+              simplifyTolerance: _simplifyToleranceDegrees,
+            ),
           );
         } on FormatException {
           // Fall through to refresh the cache.
@@ -46,7 +60,11 @@ class BoundaryService {
     await file.writeAsString(encoded);
     return compute(
       parseGeoJsonString,
-      GeoJsonParseRequest(encoded, _nameKey(type)),
+      GeoJsonParseRequest(
+        encoded,
+        _nameKey(type),
+        simplifyTolerance: _simplifyToleranceDegrees,
+      ),
     );
   }
 

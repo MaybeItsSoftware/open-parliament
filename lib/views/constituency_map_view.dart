@@ -58,15 +58,14 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
   /// while it slides back down after being dismissed.
   MapArea? _lastArea;
 
-  /// True while the camera is actively moving. We render coarser polygons in
-  /// this state for smooth panning, then snap back to full detail once the map
-  /// settles — so accuracy is only ever traded transiently, never at rest.
-  bool _interacting = false;
-  StreamSubscription<MapEvent>? _mapEventSub;
-  Timer? _settleTimer;
-
-  /// How long after the last camera event we consider movement finished.
-  static const Duration _settleDelay = Duration(milliseconds: 200);
+  /// The base polygon layer, cached as a widget *instance* and rebuilt only
+  /// when the view-model hands us a different area list (mode switch/reload).
+  /// Passing the identical instance across rebuilds makes Flutter skip the
+  /// element update, so flutter_map keeps its projection/simplification
+  /// caches — its `didUpdateWidget` clears them unconditionally, which
+  /// re-projects every polygon on the UI thread and janks the whole map.
+  Widget? _baseLayer;
+  List<MapArea>? _baseLayerAreas;
 
   @override
   void initState() {
@@ -75,9 +74,6 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
       context.read<ParliamentaryDataService>(),
     );
     unawaited(_vm.load(MapMode.constituency));
-
-    // Any camera event means the map is moving; debounce back to "settled".
-    _mapEventSub = _mapController.mapEventStream.listen((_) => _markMoving());
 
     _flight.addListener(() {
       final t = Curves.easeInOutCubic.transform(_flight.value);
@@ -108,21 +104,8 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     _mapController.rotate(0);
   }
 
-  /// Flags the camera as moving and (re)arms the settle timer. Rebuilds only on
-  /// the leading edge and after settling, so the stream of move events while
-  /// dragging doesn't churn setState.
-  void _markMoving() {
-    _settleTimer?.cancel();
-    if (!_interacting) setState(() => _interacting = true);
-    _settleTimer = Timer(_settleDelay, () {
-      if (mounted && _interacting) setState(() => _interacting = false);
-    });
-  }
-
   @override
   void dispose() {
-    _settleTimer?.cancel();
-    _mapEventSub?.cancel();
     _flight.dispose();
     _vm.dispose();
     super.dispose();
@@ -192,6 +175,23 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     _flyTo(target.center, target.zoom);
   }
 
+  /// Simplification for polygon rendering, in logical pixels: near-lossless,
+  /// and constant — changing it forces flutter_map to re-simplify everything.
+  static const double _polygonTolerance = 0.5;
+
+  /// Returns the cached base layer, rebuilding it only for a new area list.
+  Widget _basePolygonLayerFor(List<MapArea> areas) {
+    if (!identical(_baseLayerAreas, areas)) {
+      _baseLayerAreas = areas;
+      _baseLayer = PolygonLayer(
+        polygons: _toPolygons(areas),
+        polygonCulling: true,
+        simplificationTolerance: _polygonTolerance,
+      );
+    }
+    return _baseLayer!;
+  }
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider.value(
@@ -199,7 +199,9 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
       child: Consumer<ConstituencyMapViewModel>(
         builder: (context, vm, _) {
           final theme = Theme.of(context);
-          final polygons = _toPolygons(vm.areas, _selected?.name);
+          final selectionPolygons = _selected == null
+              ? const <Polygon>[]
+              : _selectionPolygons(vm.areas, _selected!.name);
           return Scaffold(
             appBar: AppBar(
               title: const Text('Control Map'),
@@ -253,22 +255,19 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                   ),
                   children: [
                     buildCartoBaseTileLayer(context),
-                    if (polygons.isNotEmpty)
+                    if (vm.areas.isNotEmpty) _basePolygonLayerFor(vm.areas),
+                    // The selection highlight lives in its own tiny layer so
+                    // tapping never rebuilds (and re-projects) the base layer.
+                    if (selectionPolygons.isNotEmpty)
                       PolygonLayer(
-                        polygons: polygons,
-                        polygonCulling: true,
-                        // Lightly simplify while moving to keep panning smooth
-                        // without visibly degrading edge quality. At rest we drop
-                        // back to a near-lossless 0.5 px so the static and
-                        // zoomed-in map keeps full polygon accuracy. (Tolerance is
-                        // render-only — tap hit-testing always uses exact points.)
-                        simplificationTolerance: _interacting ? 1.5 : 0.5,
+                        polygons: selectionPolygons,
+                        simplificationTolerance: _polygonTolerance,
                       ),
                     // Labels sit above the fills so place names stay legible.
                     buildCartoLabelsTileLayer(context),
                   ],
                 ),
-                if (vm.isLoading && polygons.isEmpty)
+                if (vm.isLoading && vm.areas.isEmpty)
                   const Center(child: CircularProgressIndicator()),
                 if (vm.error != null)
                   Align(
@@ -342,26 +341,37 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
   }
 }
 
-List<Polygon> _toPolygons(List<MapArea> areas, String? selectedName) {
-  // The selected area is drawn last (on top) with a bolder, fuller style.
-  final base = <Polygon>[];
-  final selected = <Polygon>[];
-  for (final area in areas) {
-    final isSelected = selectedName != null && area.name == selectedName;
-    final polygon = Polygon(
-      points: area.polygon.outer,
-      holePointsList:
-          area.polygon.holes.isNotEmpty ? area.polygon.holes : null,
-      color: isSelected ? area.border.withValues(alpha: 0.45) : area.fill,
-      borderColor: isSelected
-          ? area.border
-          : area.border.withValues(alpha: 0.85),
-      borderStrokeWidth: isSelected ? 2.5 : 0.6,
-      disableHolesBorder: true,
-    );
-    (isSelected ? selected : base).add(polygon);
-  }
-  return [...base, ...selected];
+List<Polygon> _toPolygons(List<MapArea> areas) {
+  return [
+    for (final area in areas)
+      Polygon(
+        points: area.polygon.outer,
+        holePointsList:
+            area.polygon.holes.isNotEmpty ? area.polygon.holes : null,
+        color: area.fill,
+        borderColor: area.border.withValues(alpha: 0.85),
+        borderStrokeWidth: 0.6,
+        disableHolesBorder: true,
+      ),
+  ];
+}
+
+/// Bold copies of every polygon named [name] (a council can span several
+/// islands), drawn in an overlay layer above the base fills.
+List<Polygon> _selectionPolygons(List<MapArea> areas, String name) {
+  return [
+    for (final area in areas)
+      if (area.name == name)
+        Polygon(
+          points: area.polygon.outer,
+          holePointsList:
+              area.polygon.holes.isNotEmpty ? area.polygon.holes : null,
+          color: area.border.withValues(alpha: 0.45),
+          borderColor: area.border,
+          borderStrokeWidth: 2.5,
+          disableHolesBorder: true,
+        ),
+  ];
 }
 
 /// A small compass whose needle tracks the map's bearing; tap to reset north
