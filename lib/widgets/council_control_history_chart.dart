@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../models/council.dart';
 import '../utils/council_control.dart';
+import '../utils/uk_election_dates.dart';
 import '../viewmodels/council_history_viewmodel.dart';
 import 'control_split_bar.dart';
 
@@ -23,6 +24,11 @@ class CouncilControlHistoryChart extends StatelessWidget {
   /// Height of the plotting area for the tallest (most seats) column.
   static const double _chartHeight = 120;
   static const double _columnGap = 6;
+
+  /// Height reserved for the rotated date label under each column — full
+  /// dates ("1 May 2024") are much wider than the columns, so the label is
+  /// rotated 90° and this is its footprint along the (now vertical) text.
+  static const double _labelHeight = 80;
 
   /// Below this width the columns no longer fit, so the chart scrolls instead
   /// of stretching to fill the row.
@@ -67,7 +73,7 @@ class CouncilControlHistoryChart extends StatelessWidget {
                     top: 0,
                     height: _chartHeight,
                     child: CustomPaint(
-                      painter: SankeyFlowPainter(
+                      painter: ControlHistoryRibbonPainter(
                         years: years,
                         order: order,
                         maxTotal: maxTotal,
@@ -102,7 +108,7 @@ class CouncilControlHistoryChart extends StatelessWidget {
                     top: 0,
                     height: _chartHeight,
                     child: CustomPaint(
-                      painter: SankeyFlowPainter(
+                      painter: ControlHistoryRibbonPainter(
                         years: years,
                         order: order,
                         maxTotal: maxTotal,
@@ -161,8 +167,10 @@ class CouncilControlHistoryChart extends StatelessWidget {
         children: [
           SizedBox(
             height: _chartHeight,
-            // `stretch` makes the colour bands fill the column width — a
-            // ColoredBox has no intrinsic width, so without this they collapse.
+            // `stretch` keeps this footprint filling the column width so the
+            // Tooltip above still has a real, tappable hit-test area — the
+            // actual colour bands are painted by [ControlHistoryRibbonPainter]
+            // underneath, so these boxes stay transparent.
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -170,35 +178,51 @@ class CouncilControlHistoryChart extends StatelessWidget {
                   Expanded(flex: emptyFlex, child: const SizedBox()),
                 Expanded(
                   flex: total > 0 ? total : 1,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final s in segments)
-                          Expanded(
-                            flex: s.value,
-                            child: ColoredBox(
-                              color: controlSegmentColor(s.label),
-                            ),
-                          ),
-                      ],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final s in segments)
+                        Expanded(
+                          flex: s.value,
+                          child: const ColoredBox(color: Colors.transparent),
+                        ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            "'${(entry.year % 100).toString().padLeft(2, '0')}",
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: 8),
+          SizedBox(
+            height: _labelHeight,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: RotatedBox(
+                quarterTurns: 3,
+                child: Text(
+                  _formatDate(approximateUkLocalElectionDate(entry.year)),
+                  overflow: TextOverflow.visible,
+                  softWrap: false,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// Formats a date as e.g. "1 May 2024", matching the convention already
+  /// used elsewhere in the app (see `bill_view.dart`/`member_view.dart`).
+  static String _formatDate(DateTime date) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
   Widget _legend(ThemeData theme, List<String> order) {
@@ -233,7 +257,8 @@ class CouncilControlHistoryChart extends StatelessWidget {
       for (final label in order)
         if ((council.seats[label] ?? 0) > 0) '$label ${council.seats[label]}',
     ];
-    return '${entry.year} · ${controlDisplayName(council.control)}\n'
+    final date = _formatDate(approximateUkLocalElectionDate(entry.year));
+    return '$date · ${controlDisplayName(council.control)}\n'
         '${parts.join(', ')}';
   }
 
@@ -259,14 +284,19 @@ class CouncilControlHistoryChart extends StatelessWidget {
   }
 }
 
-class SankeyFlowPainter extends CustomPainter {
+class ControlHistoryRibbonPainter extends CustomPainter {
   final List<CouncilYearControl> years;
   final List<String> order;
   final int maxTotal;
   final double columnWidth;
   final double columnGap;
 
-  SankeyFlowPainter({
+  /// Bands narrower than this are bumped up to it so a small party's ribbon
+  /// stays a visible filled shape rather than a near-invisible sliver — now
+  /// that there's no bar behind it to carry the colour.
+  static const double _minBandHeight = 2;
+
+  ControlHistoryRibbonPainter({
     required this.years,
     required this.order,
     required this.maxTotal,
@@ -285,9 +315,18 @@ class SankeyFlowPainter extends CustomPainter {
         columnWidth > 0
             ? columnWidth
             : (size.width - columnGap * (count - 1)) / count;
+    // The x-coordinate of each year's sample point: the centre of its old
+    // column footprint. Ribbons are interpolated between these points, then
+    // capped with a flat stub out to the chart edges.
+    double nodeX(int i) => i * (colW + columnGap) + colW / 2;
+    // Right edge of the last real column footprint (not `size.width`) — in
+    // scroll mode the Row has a trailing gap after the newest column that
+    // isn't between two years, so ribbons shouldn't bleed into it.
+    final rightEdgeX = (count - 1) * (colW + columnGap) + colW;
 
-    // Track vertical segment coordinates for each column
-    final columnSegmentsY = List.generate(
+    // Track each year's per-party vertical band, stacked bottom-up (largest
+    // party at the base), matching `_column`'s stacking order.
+    final bandY = List.generate(
       count,
       (_) => <String, ({double top, double bottom})>{},
     );
@@ -302,65 +341,89 @@ class SankeyFlowPainter extends CustomPainter {
       for (final label in order.reversed) {
         final seats = council.seats[label] ?? 0;
         if (seats > 0) {
-          final double height = (seats / maxTotal) * size.height;
+          final double height = math.max(
+            (seats / maxTotal) * size.height,
+            _minBandHeight,
+          );
           final double bottom = yCurrent + height;
-          columnSegmentsY[i][label] = (top: yCurrent, bottom: bottom);
+          bandY[i][label] = (top: yCurrent, bottom: bottom);
           yCurrent = bottom;
         } else {
-          columnSegmentsY[i][label] = (top: yCurrent, bottom: yCurrent);
+          bandY[i][label] = (top: yCurrent, bottom: yCurrent);
         }
       }
     }
 
-    // Draw flows between consecutive columns
-    for (var i = 0; i < count - 1; i++) {
-      final startX = i * (colW + columnGap) + colW;
-      final endX = startX + columnGap;
+    // One continuous filled ribbon per party, spanning the whole chart width
+    // — the smooth curve itself is the column, not a flow between columns.
+    for (final label in order) {
+      final hasSeats = bandY.any(
+        (y) => (y[label]?.bottom ?? 0) > (y[label]?.top ?? 0),
+      );
+      if (!hasSeats) continue;
 
-      for (final label in order) {
-        final segmentLeft = columnSegmentsY[i][label];
-        final segmentRight = columnSegmentsY[i + 1][label];
-        if (segmentLeft == null || segmentRight == null) continue;
+      final paint =
+          Paint()
+            ..color = controlSegmentColor(label)
+            ..style = PaintingStyle.fill;
+      final path = Path();
 
-        // Only draw if there are seats in either column
-        if (segmentLeft.bottom > segmentLeft.top ||
-            segmentRight.bottom > segmentRight.top) {
-          final color = controlSegmentColor(label).withValues(alpha: 0.8);
-          final paint =
-              Paint()
-                ..color = color
-                ..style = PaintingStyle.fill;
-
-          final path =
-              Path()
-                ..moveTo(startX, segmentLeft.top)
-                ..cubicTo(
-                  startX + columnGap / 2,
-                  segmentLeft.top,
-                  startX + columnGap / 2,
-                  segmentRight.top,
-                  endX,
-                  segmentRight.top,
-                )
-                ..lineTo(endX, segmentRight.bottom)
-                ..cubicTo(
-                  startX + columnGap / 2,
-                  segmentRight.bottom,
-                  startX + columnGap / 2,
-                  segmentLeft.bottom,
-                  startX,
-                  segmentLeft.bottom,
-                )
-                ..close();
-
-          canvas.drawPath(path, paint);
-        }
+      if (count == 1) {
+        final band = bandY[0][label]!;
+        path
+          ..moveTo(0, band.top)
+          ..lineTo(rightEdgeX, band.top)
+          ..lineTo(rightEdgeX, band.bottom)
+          ..lineTo(0, band.bottom)
+          ..close();
+        canvas.drawPath(path, paint);
+        continue;
       }
+
+      final tops = [for (var i = 0; i < count; i++) bandY[i][label]!.top];
+      final bottoms = [
+        for (var i = 0; i < count; i++) bandY[i][label]!.bottom,
+      ];
+
+      path
+        ..moveTo(0, tops[0])
+        ..lineTo(nodeX(0), tops[0]);
+      for (var i = 0; i < count - 1; i++) {
+        final midX = (nodeX(i) + nodeX(i + 1)) / 2;
+        path.cubicTo(
+          midX,
+          tops[i],
+          midX,
+          tops[i + 1],
+          nodeX(i + 1),
+          tops[i + 1],
+        );
+      }
+      path
+        ..lineTo(rightEdgeX, tops[count - 1])
+        ..lineTo(rightEdgeX, bottoms[count - 1])
+        ..lineTo(nodeX(count - 1), bottoms[count - 1]);
+      for (var i = count - 1; i > 0; i--) {
+        final midX = (nodeX(i) + nodeX(i - 1)) / 2;
+        path.cubicTo(
+          midX,
+          bottoms[i],
+          midX,
+          bottoms[i - 1],
+          nodeX(i - 1),
+          bottoms[i - 1],
+        );
+      }
+      path
+        ..lineTo(0, bottoms[0])
+        ..close();
+
+      canvas.drawPath(path, paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant SankeyFlowPainter oldDelegate) {
+  bool shouldRepaint(covariant ControlHistoryRibbonPainter oldDelegate) {
     return !listEquals(oldDelegate.years, years) ||
         !listEquals(oldDelegate.order, order) ||
         oldDelegate.maxTotal != maxTotal ||
