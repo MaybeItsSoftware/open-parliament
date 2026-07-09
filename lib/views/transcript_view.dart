@@ -62,6 +62,23 @@ class _TranscriptViewState extends State<TranscriptView>
       ItemPositionsListener.create();
   final ScrollController _minimapController = ScrollController();
 
+  /// Find-in-transcript search. Matching is a synchronous scan over the
+  /// already-loaded [TranscriptViewModel.speeches] (no network calls), with
+  /// input debounced so fast typing on long transcripts doesn't thrash
+  /// [setState].
+  bool _isSearchOpen = false;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  Timer? _searchDebounce;
+  List<int> _searchMatches = const [];
+  Set<int> _searchMatchSet = const {};
+
+  /// The committed (debounced) search term, used to highlight matched text
+  /// inline. Kept in sync with [_searchMatches] rather than updated on every
+  /// keystroke.
+  String _searchQuery = '';
+  int _currentMatchPosition = 0;
+
   /// Parliament Live video tray that drops down from the AppBar. The WebView is
   /// built lazily on first open ([_playerEverOpened]) and then kept mounted —
   /// the tray is collapsed by clipping it to zero height — so playback and
@@ -111,6 +128,9 @@ class _TranscriptViewState extends State<TranscriptView>
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
     _trayController.dispose();
     _minimapController.dispose();
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     _vm.dispose();
     super.dispose();
   }
@@ -171,6 +191,78 @@ class _TranscriptViewState extends State<TranscriptView>
       duration: const Duration(milliseconds: 400),
       curve: Curves.easeInOut,
     );
+  }
+
+  // ─── Find-in-transcript search ─────────────────────────────────────────────
+
+  void _openSearch() {
+    setState(() => _isSearchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _isSearchOpen = false;
+      _searchMatches = const [];
+      _searchMatchSet = const {};
+      _currentMatchPosition = 0;
+      _searchQuery = '';
+    });
+    _searchFocusNode.unfocus();
+  }
+
+  void _onSearchChanged(String query) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 150), () {
+      final matches = _computeMatches(query);
+      setState(() {
+        _searchMatches = matches;
+        _searchMatchSet = matches.toSet();
+        _currentMatchPosition = 0;
+        _searchQuery = query.trim();
+      });
+      if (matches.isNotEmpty) _jumpToIndex(matches.first);
+    });
+  }
+
+  /// Speech indices whose text or speaker name contains [query]
+  /// (case-insensitive), in transcript order.
+  List<int> _computeMatches(String query) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return const [];
+    final matches = <int>[];
+    for (var i = 0; i < _vm.speeches.length; i++) {
+      final speech = _vm.speeches[i];
+      final speaker = speakerIdentityFor(speech, _vm.memberForSpeech(speech));
+      if (speech.speechText.toLowerCase().contains(needle) ||
+          speaker.name.toLowerCase().contains(needle)) {
+        matches.add(i);
+      }
+    }
+    return matches;
+  }
+
+  void _goToNextMatch() {
+    if (_searchMatches.isEmpty) return;
+    setState(() {
+      _currentMatchPosition =
+          (_currentMatchPosition + 1) % _searchMatches.length;
+    });
+    _jumpToIndex(_searchMatches[_currentMatchPosition]);
+  }
+
+  void _goToPreviousMatch() {
+    if (_searchMatches.isEmpty) return;
+    setState(() {
+      _currentMatchPosition =
+          (_currentMatchPosition - 1 + _searchMatches.length) %
+          _searchMatches.length;
+    });
+    _jumpToIndex(_searchMatches[_currentMatchPosition]);
   }
 
   Future<void> _openParliamentLiveUrl(Uri url, {String? title}) async {
@@ -234,111 +326,207 @@ class _TranscriptViewState extends State<TranscriptView>
               ? vm.primaryDebateTitle!
               : 'Hansard Debate';
 
-          return Scaffold(
-            appBar: AppBar(
-              backgroundColor: appBarColor,
-              foregroundColor: appBarColor != null ? appBarForeground : null,
-              iconTheme: appBarColor != null
-                  ? const IconThemeData(color: appBarForeground)
-                  : null,
-              toolbarHeight: _scrolled ? 48 : kToolbarHeight,
-              title: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: _scrolled
-                    ? Text(
-                        titleText,
-                        key: const ValueKey('title-compact'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      )
-                    : Column(
-                        key: const ValueKey('title-full'),
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            titleText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+          return PopScope(
+            canPop: !_isSearchOpen,
+            onPopInvokedWithResult: (didPop, _) {
+              if (didPop) return;
+              _closeSearch();
+            },
+            child: Scaffold(
+              appBar: AppBar(
+                backgroundColor: appBarColor,
+                foregroundColor: appBarColor != null ? appBarForeground : null,
+                iconTheme:
+                    appBarColor != null
+                        ? const IconThemeData(color: appBarForeground)
+                        : null,
+                toolbarHeight: _scrolled ? 48 : kToolbarHeight,
+                leading:
+                    _isSearchOpen
+                        ? IconButton(
+                          icon: const Icon(Icons.arrow_back),
+                          tooltip: 'Close search',
+                          onPressed: _closeSearch,
+                        )
+                        : null,
+                title:
+                    _isSearchOpen
+                        ? TextField(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          textInputAction: TextInputAction.search,
+                          style:
+                              appBarColor != null
+                                  ? const TextStyle(color: appBarForeground)
+                                  : null,
+                          cursorColor:
+                              appBarColor != null ? appBarForeground : null,
+                          decoration: InputDecoration(
+                            hintText: 'Search this debate',
+                            hintStyle:
+                                appBarColor != null
+                                    ? TextStyle(
+                                      color: appBarForeground.withValues(
+                                        alpha: 0.7,
+                                      ),
+                                    )
+                                    : null,
+                            border: InputBorder.none,
                           ),
-                          Text(
-                            widget.displayDate,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelMedium
-                                ?.copyWith(
-                                  color: appBarColor != null
-                                      ? appBarForeground.withValues(alpha: 0.8)
-                                      : null,
+                          onChanged: _onSearchChanged,
+                        )
+                        : AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          child:
+                              _scrolled
+                                  ? Text(
+                                    titleText,
+                                    key: const ValueKey('title-compact'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  )
+                                  : Column(
+                                    key: const ValueKey('title-full'),
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        titleText,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      Text(
+                                        widget.displayDate,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.labelMedium?.copyWith(
+                                          color:
+                                              appBarColor != null
+                                                  ? appBarForeground.withValues(
+                                                    alpha: 0.8,
+                                                  )
+                                                  : null,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                        ),
+                actions:
+                    _isSearchOpen
+                        ? [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Center(
+                              child: Text(
+                                _searchController.text.trim().isEmpty
+                                    ? ''
+                                    : (_searchMatches.isEmpty
+                                        ? 'No matches'
+                                        : '${_currentMatchPosition + 1} of ${_searchMatches.length}'),
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.labelMedium?.copyWith(
+                                  color:
+                                      appBarColor != null
+                                          ? appBarForeground
+                                          : null,
                                 ),
+                              ),
+                            ),
                           ),
+                          IconButton(
+                            icon: const Icon(Icons.keyboard_arrow_up),
+                            tooltip: 'Previous match',
+                            onPressed:
+                                _searchMatches.isEmpty
+                                    ? null
+                                    : _goToPreviousMatch,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.keyboard_arrow_down),
+                            tooltip: 'Next match',
+                            onPressed:
+                                _searchMatches.isEmpty ? null : _goToNextMatch,
+                          ),
+                        ]
+                        : [
+                          IconButton(
+                            icon: const Icon(Icons.search),
+                            tooltip: 'Search this debate',
+                            onPressed: _openSearch,
+                          ),
+                          if (parliamentLiveSectionHasVideo(
+                            vm.primarySection,
+                          )) ...[
+                            if (_isPlayerOpen)
+                              FutureBuilder<ParliamentLiveTarget>(
+                                future: vm.parliamentLiveTarget(),
+                                builder: (context, snapshot) {
+                                  final target = snapshot.data;
+                                  if (target == null) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return IconButton(
+                                    icon: const Icon(Icons.open_in_new),
+                                    tooltip: 'Open full player',
+                                    onPressed:
+                                        () => _openParliamentLiveUrl(
+                                          target.launchUrl,
+                                          title:
+                                              'Parliament Live · ${target.title}',
+                                        ),
+                                  );
+                                },
+                              ),
+                            IconButton(
+                              icon: Icon(
+                                _isPlayerOpen
+                                    ? Icons.smart_display
+                                    : Icons.smart_display_outlined,
+                              ),
+                              tooltip:
+                                  _isPlayerOpen
+                                      ? 'Hide Parliament Live video'
+                                      : 'Show Parliament Live video',
+                              onPressed: _togglePlayer,
+                            ),
+                          ],
                         ],
-                      ),
               ),
-              actions: [
-                if (parliamentLiveSectionHasVideo(vm.primarySection)) ...[
-                  if (_isPlayerOpen)
-                    FutureBuilder<ParliamentLiveTarget>(
-                      future: vm.parliamentLiveTarget(),
-                      builder: (context, snapshot) {
-                        final target = snapshot.data;
-                        if (target == null) return const SizedBox.shrink();
-                        return IconButton(
-                          icon: const Icon(Icons.open_in_new),
-                          tooltip: 'Open full player',
-                          onPressed: () => _openParliamentLiveUrl(
-                            target.launchUrl,
-                            title: 'Parliament Live · ${target.title}',
-                          ),
-                        );
-                      },
-                    ),
-                  IconButton(
-                    icon: Icon(
-                      _isPlayerOpen
-                          ? Icons.smart_display
-                          : Icons.smart_display_outlined,
-                    ),
-                    tooltip: _isPlayerOpen
-                        ? 'Hide Parliament Live video'
-                        : 'Show Parliament Live video',
-                    onPressed: _togglePlayer,
-                  ),
-                ],
-              ],
-            ),
-            body: LayoutBuilder(
-              builder: (context, constraints) {
-                final maxWidth = constraints.maxWidth >= 1200 ? 1080.0 : 920.0;
-                if (vm.isLoading) return _buildLoadingIndicator();
-                if (vm.error != null) return _buildErrorView(vm.error!);
-                if (vm.speeches.isEmpty) return _buildEmptyView();
-                final contentWidth = maxWidth + _minimapWidth;
-                return Column(
-                  children: [
-                    _buildPlayerTraySection(vm, contentWidth),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: contentWidth),
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Expanded(child: _buildTranscriptList(vm)),
-                                _buildMinimap(vm),
-                              ],
+              body: LayoutBuilder(
+                builder: (context, constraints) {
+                  final maxWidth =
+                      constraints.maxWidth >= 1200 ? 1080.0 : 920.0;
+                  if (vm.isLoading) return _buildLoadingIndicator();
+                  if (vm.error != null) return _buildErrorView(vm.error!);
+                  if (vm.speeches.isEmpty) return _buildEmptyView();
+                  final contentWidth = maxWidth + _minimapWidth;
+                  return Column(
+                    children: [
+                      _buildPlayerTraySection(vm, contentWidth),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: contentWidth),
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(child: _buildTranscriptList(vm)),
+                                  _buildMinimap(vm),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                );
-              },
+                    ],
+                  );
+                },
+              ),
             ),
           );
         },
@@ -433,19 +621,39 @@ class _TranscriptViewState extends State<TranscriptView>
           final speech = vm.speeches[speechIndex];
           final member = vm.memberForSpeech(speech);
           final timeLabel = vm.estimatedTimeForSpeechIndex(speechIndex);
-          return RepaintBoundary(
-            child: GestureDetector(
-              behavior: HitTestBehavior.deferToChild,
-              onLongPress: speech.speechText.trim().isEmpty
-                  ? null
-                  : () => _showSpeechActions(speech, member),
-              child: SpeechBlock(
-                speech: speech,
-                member: member,
-                timeLabel: timeLabel,
-                onMemberTap: member != null
-                    ? () => _openMemberProfile(context, member)
-                    : null,
+          final isMatch = _searchMatchSet.contains(speechIndex);
+          final isCurrentMatch =
+              _searchMatches.isNotEmpty &&
+              speechIndex == _searchMatches[_currentMatchPosition];
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            color:
+                isCurrentMatch
+                    ? Theme.of(
+                      context,
+                    ).colorScheme.primary.withValues(alpha: 0.18)
+                    : (isMatch
+                        ? Theme.of(
+                          context,
+                        ).colorScheme.secondary.withValues(alpha: 0.10)
+                        : null),
+            child: RepaintBoundary(
+              child: GestureDetector(
+                behavior: HitTestBehavior.deferToChild,
+                onLongPress:
+                    speech.speechText.trim().isEmpty
+                        ? null
+                        : () => _showSpeechActions(speech, member),
+                child: SpeechBlock(
+                  speech: speech,
+                  member: member,
+                  timeLabel: timeLabel,
+                  onMemberTap:
+                      member != null
+                          ? () => _openMemberProfile(context, member)
+                          : null,
+                  searchQuery: _searchQuery,
+                ),
               ),
             ),
           );
