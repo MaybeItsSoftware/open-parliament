@@ -135,8 +135,6 @@ platform :android do
     upload_to_play_store(
       package_name:                  APP_ID,
       track:                         "internal",
-      track_promote_to:              "alpha",
-      track_promote_release_status:  "draft",
       aab:                           File.join(ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab"),
       json_key_data:                 ENV["PLAY_SERVICE_ACCOUNT_JSON"],
       skip_upload_apk:               true,
