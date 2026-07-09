@@ -7,6 +7,7 @@ import '../utils/party_colors.dart' as party_util;
 import '../utils/speaker_identity.dart';
 import 'speech_block/committee_roster_card.dart';
 import 'speech_block/division_result_card.dart';
+import 'speech_block/highlighted_text.dart';
 import 'speech_block/in_chair_banner.dart';
 import 'speech_block/speaker_contribution_card.dart';
 
@@ -25,12 +26,17 @@ class SpeechBlock extends StatelessWidget {
   final String? timeLabel;
   final VoidCallback? onMemberTap;
 
+  /// Active find-in-transcript search term; matches are highlighted inline.
+  /// Empty when not searching.
+  final String searchQuery;
+
   const SpeechBlock({
     super.key,
     required this.speech,
     this.member,
     this.timeLabel,
     this.onMemberTap,
+    this.searchQuery = '',
   });
 
   @override
@@ -62,6 +68,7 @@ class SpeechBlock extends StatelessWidget {
       member: member,
       timeLabel: timeLabel,
       onMemberTap: onMemberTap,
+      searchQuery: searchQuery,
     );
   }
 
@@ -90,9 +97,14 @@ class SpeechBlock extends StatelessWidget {
             ),
             children: [
               const TextSpan(text: 'Moved by '),
-              TextSpan(
+              ...highlightedSpans(
                 text: speech.speechText,
+                query: searchQuery,
                 style: const TextStyle(fontWeight: FontWeight.w700),
+                highlightStyle: TextStyle(
+                  backgroundColor: theme.colorScheme.tertiaryContainer,
+                  color: theme.colorScheme.onTertiaryContainer,
+                ),
               ),
             ],
           ),
@@ -102,8 +114,9 @@ class SpeechBlock extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-      child: Text(
+      child: HighlightedText(
         speech.speechText,
+        query: searchQuery,
         style: theme.textTheme.bodyLarge?.copyWith(
           fontStyle: FontStyle.italic,
           color: theme.colorScheme.onSurfaceVariant,
@@ -143,8 +156,9 @@ class SpeechBlock extends StatelessWidget {
   Widget _buildEventTag(ThemeData theme) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-      child: Text(
+      child: HighlightedText(
         speech.speechText.trim(),
+        query: searchQuery,
         style: theme.textTheme.bodySmall?.copyWith(
           fontStyle: FontStyle.italic,
           color: theme.colorScheme.onSurfaceVariant,
@@ -162,8 +176,9 @@ class SpeechBlock extends StatelessWidget {
     if (text.isEmpty || speech.isAction) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-        child: Text(
+        child: HighlightedText(
           text.isNotEmpty ? '$entity $text' : entity,
+          query: searchQuery,
           style: theme.textTheme.bodySmall?.copyWith(
             fontStyle: FontStyle.italic,
             color: theme.colorScheme.onSurfaceVariant,
@@ -194,15 +209,17 @@ class SpeechBlock extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                HighlightedText(
                   entity,
+                  query: searchQuery,
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.w600,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                Text(
+                HighlightedText(
                   text,
+                  query: searchQuery,
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontStyle: FontStyle.italic,
                     color: theme.colorScheme.onSurfaceVariant,
@@ -259,15 +276,27 @@ class SpeechBlock extends StatelessWidget {
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                   children: [
-                    TextSpan(
+                    ...highlightedSpans(
                       text: speaker.name,
+                      query: searchQuery,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontStyle: FontStyle.normal,
                         color: nameColor,
                       ),
+                      highlightStyle: TextStyle(
+                        backgroundColor: theme.colorScheme.tertiaryContainer,
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
                     ),
-                    TextSpan(text: ' $actionText'),
+                    ...highlightedSpans(
+                      text: ' $actionText',
+                      query: searchQuery,
+                      highlightStyle: TextStyle(
+                        backgroundColor: theme.colorScheme.tertiaryContainer,
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -291,8 +320,9 @@ class SpeechBlock extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
+            child: HighlightedText(
               speech.speechText.trim(),
+              query: searchQuery,
               style: theme.textTheme.bodySmall?.copyWith(
                 fontWeight: FontWeight.w600,
                 color: theme.colorScheme.primary,

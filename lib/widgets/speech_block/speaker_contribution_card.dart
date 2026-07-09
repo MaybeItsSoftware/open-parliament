@@ -5,6 +5,7 @@ import '../../models/member.dart';
 import '../../models/speech.dart';
 import '../../utils/party_colors.dart' as party_util;
 import '../../utils/speaker_identity.dart';
+import 'highlighted_text.dart';
 
 /// The standard named-contribution card: party-tinted left border, avatar,
 /// speaker name + title + constituency, and the speech body.
@@ -14,12 +15,17 @@ class SpeakerContributionCard extends StatelessWidget {
   final String? timeLabel;
   final VoidCallback? onMemberTap;
 
+  /// Active find-in-transcript search term; matches are highlighted inline
+  /// within the speaker name and speech body. Empty when not searching.
+  final String searchQuery;
+
   const SpeakerContributionCard({
     super.key,
     required this.speech,
     required this.member,
     this.timeLabel,
     this.onMemberTap,
+    this.searchQuery = '',
   });
 
   @override
@@ -67,11 +73,13 @@ class SpeakerContributionCard extends StatelessWidget {
                         speaker: speaker,
                         partyColor: partyColor,
                         timeLabel: timeLabel,
+                        searchQuery: searchQuery,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
+                    HighlightedText(
                       speech.speechText,
+                      query: searchQuery,
                       style: speech.isQuote
                           ? textTheme.bodyMedium?.copyWith(
                               fontStyle: FontStyle.italic,
@@ -140,11 +148,13 @@ class _NameLine extends StatelessWidget {
   final SpeakerIdentity speaker;
   final Color partyColor;
   final String? timeLabel;
+  final String searchQuery;
 
   const _NameLine({
     required this.speaker,
     required this.partyColor,
     required this.timeLabel,
+    this.searchQuery = '',
   });
 
   @override
@@ -160,8 +170,9 @@ class _NameLine extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Text(
+              child: HighlightedText(
                 speaker.name,
+                query: searchQuery,
                 style: textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: nameColor,
