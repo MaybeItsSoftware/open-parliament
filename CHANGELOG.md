@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.0...v0.5.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **android:** remove automatic alpha promotion from beta lane ([a1b545f](https://github.com/MaybeItsSoftware/open-parliament/commit/a1b545f2a59c684606d6a3eef4462181dca59ac8))
+
 # [0.5.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.4.0...v0.5.0) (2026-07-09)
 
 
