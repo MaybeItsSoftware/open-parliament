@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/council.dart';
 import '../models/councillor.dart';
+import '../models/councillor_profile.dart';
 import '../models/member.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/area_match.dart';
@@ -127,6 +128,7 @@ class SearchViewModel extends ChangeNotifier {
   List<_IndexedCouncillor>? _councillorIndex;
   Future<List<Council>>? _councilsFuture;
   Map<String, Council>? _councilLookup;
+  final Map<String, Future<CouncillorProfile?>> _profileCache = {};
 
   SearchViewModel(
     this._service, {
@@ -196,6 +198,17 @@ class SearchViewModel extends ChangeNotifier {
       for (final c in all)
         if (normaliseCouncilName(c.council) == key) c,
     ];
+  }
+
+  /// Democracy Club photo/contact enrichment for a councillor, memoized for
+  /// the life of this view model so repeated rebuilds (e.g. on every
+  /// keystroke) don't re-hit the on-disk cache for the same person.
+  Future<CouncillorProfile?> profileFor(Councillor councillor) {
+    final key = '${councillor.council}|${councillor.ward}|${councillor.name}';
+    return _profileCache.putIfAbsent(
+      key,
+      () => _service.fetchCouncillorProfile(councillor),
+    );
   }
 
   void _startSearch(String query) {

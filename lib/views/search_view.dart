@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/councillor.dart';
+import '../models/councillor_profile.dart';
 import '../models/member.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/area_match.dart';
+import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/search_viewmodel.dart';
+import '../widgets/person_avatar.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'council_view.dart';
@@ -278,13 +281,23 @@ class _SearchViewState extends State<SearchView> {
     }
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.person_outline),
+      leading: _memberAvatar(member),
       title: Text(member.name),
       subtitle: parts.isNotEmpty ? Text(parts.join(' · ')) : null,
       trailing: const Icon(Icons.chevron_right),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => MemberView(member: member)),
       ),
+    );
+  }
+
+  Widget _memberAvatar(Member member) {
+    final partyKey =
+        member.partyAbbreviation.isNotEmpty ? member.partyAbbreviation : member.party;
+    return PersonAvatar(
+      imageUrl: member.thumbnailUrl,
+      name: member.name,
+      color: party_util.partyColor(partyKey),
     );
   }
 
@@ -300,7 +313,7 @@ class _SearchViewState extends State<SearchView> {
     }
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.location_on_outlined),
+      leading: _memberAvatar(constituency.member),
       title: Text(constituency.name),
       subtitle: Text(subtitleParts.join(' · ')),
       trailing: const Icon(Icons.chevron_right),
@@ -330,7 +343,17 @@ class _SearchViewState extends State<SearchView> {
     final council = result.council;
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.how_to_vote_outlined),
+      leading: FutureBuilder<CouncillorProfile?>(
+        future: vm.profileFor(councillor),
+        builder: (context, snapshot) {
+          final profile = snapshot.data;
+          return PersonAvatar(
+            imageUrl: profile?.thumbnailUrl ?? profile?.imageUrl,
+            name: councillor.name,
+            color: party_util.partyColor(displayParty),
+          );
+        },
+      ),
       title: Text(councillor.name),
       subtitle: subtitleParts.isNotEmpty ? Text(subtitleParts.join(' · ')) : null,
       trailing:

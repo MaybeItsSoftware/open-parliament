@@ -1,3 +1,15 @@
+# [0.4.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.2...v0.4.0) (2026-07-08)
+
+
+### Bug Fixes
+
+* updated disclaimer ([dc41814](https://github.com/MaybeItsSoftware/open-parliament/commit/dc418149667268730c846606e814be881a0ff7b5))
+
+
+### Features
+
+* replace app icon and generate Play Store screenshots from live data ([44a6ba0](https://github.com/MaybeItsSoftware/open-parliament/commit/44a6ba0480cb02111bdca99100c02ca3c079f6f0))
+
 ## [0.3.2](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.1...v0.3.2) (2026-07-05)
 
 
