@@ -30,6 +30,20 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   DateTime? previousSittingDateResult;
   DateTime? nextSittingDateResult;
 
+  /// Optional per-date overrides for [getPreviousSittingDate] /
+  /// [getNextSittingDate], used to script multi-hop chains. When unset, the
+  /// fixed `previousSittingDateResult`/`nextSittingDateResult` are returned
+  /// regardless of the requested date.
+  DateTime? Function(String date)? previousSittingDateBuilder;
+  DateTime? Function(String date)? nextSittingDateBuilder;
+
+  /// Optional per-date overrides for [getDebatesForDate] / [getSpeeches],
+  /// used to script which dates have real vs. placeholder-only content. When
+  /// unset, [getDebatesForDate] returns an empty list and [getSpeeches]
+  /// falls back to its existing fixed-result behaviour below.
+  List<Debate> Function(String date)? debatesForDateBuilder;
+  List<Speech> Function(String date)? speechesForDateBuilder;
+
   /// Optional scripted override for [getSittingDates], called with the
   /// requested (year, month). When unset, [sittingDatesResult] is returned.
   /// [getSittingDatesCalls] counts every invocation.
@@ -119,11 +133,11 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 
   @override
   Future<DateTime?> getPreviousSittingDate(String date) async =>
-      previousSittingDateResult;
+      previousSittingDateBuilder?.call(date) ?? previousSittingDateResult;
 
   @override
   Future<DateTime?> getNextSittingDate(String date) async =>
-      nextSittingDateResult;
+      nextSittingDateBuilder?.call(date) ?? nextSittingDateResult;
 
   @override
   Future<Set<DateTime>> getSittingDates(int year, int month) async {
@@ -139,7 +153,7 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
       await Future<void>.delayed(speechesDelay);
     }
     if (speechesError != null) throw speechesError!;
-    return speechesResult;
+    return speechesForDateBuilder?.call(date) ?? speechesResult;
   }
 
   @override
@@ -171,7 +185,8 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   }
 
   @override
-  Future<List<Debate>> getDebatesForDate(String date) async => const [];
+  Future<List<Debate>> getDebatesForDate(String date) async =>
+      debatesForDateBuilder?.call(date) ?? const [];
 
   @override
   Future<List<Map<String, dynamic>>> searchCachedDebates(
@@ -353,6 +368,138 @@ void main() {
       fakeService.previousSittingDateResult = DateTime(2024, 7, 22);
       final result = await vm.mostRecentSittingDay(DateTime(2024, 8, 15));
       expect(result, DateTime(2024, 7, 22));
+    });
+
+    group('hasVisibleDebates', () {
+      const placeholderDebate = Debate(
+        id: 'd-placeholder',
+        title: 'The House met at 11.30 am',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realDebate = Debate(
+        id: 'd-real',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realSpeech = Speech(
+        id: 's1',
+        debateId: 'd-real',
+        debateTitle: 'Oral Answers to Questions',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice',
+        speechText: 'A real contribution.',
+        orderIndex: 0,
+      );
+
+      test('returns false for a placeholder-only day', () async {
+        fakeService.debatesForDateBuilder = (_) => [placeholderDebate];
+        fakeService.speechesForDateBuilder = (_) => [];
+
+        final result = await vm.hasVisibleDebates(DateTime(2024, 11, 4));
+        expect(result, isFalse);
+      });
+
+      test('returns true when a debate has real content', () async {
+        fakeService.debatesForDateBuilder = (_) => [realDebate];
+        fakeService.speechesForDateBuilder = (_) => [realSpeech];
+
+        final result = await vm.hasVisibleDebates(DateTime(2024, 11, 4));
+        expect(result, isTrue);
+      });
+    });
+
+    group('content-aware lookback', () {
+      const placeholderDate = '2024-11-06';
+      const placeholderDebate = Debate(
+        id: 'd-placeholder',
+        title: 'The House met at 11.30 am',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realDebate = Debate(
+        id: 'd-real',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realSpeech = Speech(
+        id: 's1',
+        debateId: 'd-real',
+        debateTitle: 'Oral Answers to Questions',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice',
+        speechText: 'A real contribution.',
+        orderIndex: 0,
+      );
+
+      test(
+          'mostRecentSittingDay skips a placeholder-only day and returns '
+          'the previous real day', () async {
+        fakeService.debatesForDateBuilder =
+            (date) => date == placeholderDate ? [placeholderDebate] : [realDebate];
+        fakeService.speechesForDateBuilder =
+            (date) => date == placeholderDate ? [] : [realSpeech];
+        fakeService.previousSittingDateBuilder =
+            (date) => date == placeholderDate ? DateTime(2024, 11, 5) : null;
+
+        final result = await vm.mostRecentSittingDay(DateTime(2024, 11, 6));
+        expect(result, DateTime(2024, 11, 5));
+      });
+
+      test(
+          'mostRecentSittingDay gives up after the lookback bound and '
+          'returns the last day seen', () async {
+        fakeService.debatesForDateBuilder = (_) => [placeholderDebate];
+        fakeService.speechesForDateBuilder = (_) => [];
+        // Always resolves to the day before the requested one, so every
+        // candidate in the chain is placeholder-only.
+        fakeService.previousSittingDateBuilder =
+            (date) => DateTime.parse(date).subtract(const Duration(days: 1));
+
+        final result = await vm.mostRecentSittingDay(DateTime(2024, 11, 30));
+        // 15 hops back from Nov 30 lands on Nov 16 (30 - 14).
+        expect(result, DateTime(2024, 11, 16));
+      });
+
+      test('previousVisibleSittingDay skips a placeholder-only day',
+          () async {
+        // The intermediate day (Nov 5) is placeholder-only; Nov 4 is real.
+        // Nov 6 itself is never content-checked by this walk.
+        const intermediateDate = '2024-11-05';
+        fakeService.debatesForDateBuilder = (date) =>
+            date == intermediateDate ? [placeholderDebate] : [realDebate];
+        fakeService.speechesForDateBuilder =
+            (date) => date == intermediateDate ? [] : [realSpeech];
+        fakeService.previousSittingDateBuilder = (date) {
+          if (date == '2024-11-06') return DateTime(2024, 11, 5);
+          if (date == intermediateDate) return DateTime(2024, 11, 4);
+          return null;
+        };
+
+        final result = await vm.previousVisibleSittingDay(DateTime(2024, 11, 6));
+        expect(result, DateTime(2024, 11, 4));
+      });
+
+      test('nextVisibleSittingDay skips a placeholder-only day', () async {
+        // The intermediate day (Nov 5) is placeholder-only; Nov 6 is real.
+        const intermediateDate = '2024-11-05';
+        fakeService.debatesForDateBuilder = (date) =>
+            date == intermediateDate ? [placeholderDebate] : [realDebate];
+        fakeService.speechesForDateBuilder =
+            (date) => date == intermediateDate ? [] : [realSpeech];
+        fakeService.nextSittingDateBuilder = (date) {
+          if (date == '2024-11-04') return DateTime(2024, 11, 5);
+          if (date == intermediateDate) return DateTime(2024, 11, 6);
+          return null;
+        };
+
+        final result = await vm.nextVisibleSittingDay(DateTime(2024, 11, 4));
+        expect(result, DateTime(2024, 11, 6));
+      });
     });
 
     group('sittingDaysInMonth', () {
