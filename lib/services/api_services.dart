@@ -1088,8 +1088,10 @@ class BoundaryApiService {
   /// 0.01 (~1.1 km) made constituency outlines visibly blocky. The gateway's
   /// per-page time is dominated by fixed simplification cost, not output size,
   /// so finer detail here costs payload (parsed off-isolate) but not latency.
-  /// Councils use this default; their coastline-dense geometry is already ~7.5 MB
-  /// at 220 m, so going finer would balloon the cache and jank rendering.
+  /// Councils use this default — but note the hosted council layer *ignores*
+  /// this parameter with `f=geojson` and returns full-resolution coastline
+  /// (~30 MB); `BoundaryService` re-simplifies client-side after parsing, so
+  /// this is best-effort payload reduction only.
   static const double _defaultMaxAllowableOffset = 0.002;
 
   /// Finer tolerance for constituencies (~55 m). They are small subdivisions
