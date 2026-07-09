@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -355,7 +356,8 @@ class _DebateCardContent extends StatelessWidget {
   // Height thresholds (px) at which each extra tier becomes visible.
   static const double _metaTier = 100;
   static const double _chipTier = 152;
-  static const double _pieTier = 220;
+  static const double _speakersTier = 190;
+  static const double _pieTier = 270;
 
   @override
   Widget build(BuildContext context) {
@@ -366,6 +368,8 @@ class _DebateCardContent extends StatelessWidget {
         final showMeta = height >= _metaTier && _metaSegments(item).isNotEmpty;
         final chips = _contextChips(context);
         final showChips = height >= _chipTier && chips.isNotEmpty;
+        final showSpeakers =
+            height >= _speakersTier && item.topSpeakers.isNotEmpty;
         final showPie = height >= _pieTier && hasParties;
 
         return Padding(
@@ -402,14 +406,18 @@ class _DebateCardContent extends StatelessWidget {
                       ),
                 ),
               ],
-              // Party indicator: always present (thin bar) so even the
-              // shortest cards carry a colour cue; upgrades to a pie + legend
-              // once the card is tall enough to host one.
-              if (showPie) ...[
+              // Engagement content: a thin party bar on short cards, upgrading
+              // to a top-speakers list once there's room, and finally to the
+              // list plus a full party pie + legend on the tallest cards.
+              if (showSpeakers) ...[
                 const SizedBox(height: 8),
-                Expanded(
-                  child: _PartyContributionPie(breakdown: item.partyBreakdown),
-                ),
+                _TopSpeakersList(speakers: item.topSpeakers),
+                if (showPie) ...[
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: _PartyContributionPie(breakdown: item.partyBreakdown),
+                  ),
+                ],
               ] else if (hasParties) ...[
                 const SizedBox(height: 6),
                 _PartyContributionBar(breakdown: item.partyBreakdown),
@@ -542,6 +550,152 @@ class _ActionChipLink extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Ranked list of a debate's most engaged speakers, shown once a card is tall
+/// enough to host it. Each row is a small party-ringed portrait (with a
+/// contribution-count badge) and the speaker's name.
+class _TopSpeakersList extends StatelessWidget {
+  final List<SpeakerContribution> speakers;
+
+  const _TopSpeakersList({required this.speakers});
+
+  static const double _avatarSize = 28;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final speaker in speakers)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              children: [
+                _SpeakerAvatar(speaker: speaker, size: _avatarSize),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    speaker.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.labelMedium,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Small circular portrait for one speaker: a party-coloured ring around the
+/// image (or initials, when no thumbnail is available or it fails to load),
+/// with a contribution-count badge at the bottom-right corner.
+class _SpeakerAvatar extends StatelessWidget {
+  final SpeakerContribution speaker;
+  final double size;
+
+  const _SpeakerAvatar({required this.speaker, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final ringColor = partyColor(speaker.partyToken ?? '');
+    final theme = Theme.of(context);
+    final url = speaker.thumbnailUrl;
+    return SizedBox(
+      width: size + 6,
+      height: size + 6,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: ringColor, width: 1.5),
+            ),
+            child: ClipOval(
+              child: url != null && url.isNotEmpty
+                  ? CachedNetworkImage(
+                      imageUrl: url,
+                      width: size,
+                      height: size,
+                      fit: BoxFit.cover,
+                      placeholder: (_, __) =>
+                          _initialsAvatar(theme, ringColor, speaker.name, size),
+                      errorWidget: (_, __, ___) =>
+                          _initialsAvatar(theme, ringColor, speaker.name, size),
+                    )
+                  : _initialsAvatar(theme, ringColor, speaker.name, size),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              decoration: BoxDecoration(
+                color: ringColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: theme.colorScheme.surface,
+                  width: 1,
+                ),
+              ),
+              child: Text(
+                '${speaker.contributionCount}',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: _foregroundFor(ringColor, theme),
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _initialsAvatar(
+    ThemeData theme,
+    Color color,
+    String name,
+    double diameter,
+  ) {
+    return CircleAvatar(
+      radius: diameter / 2,
+      backgroundColor: color.withValues(alpha: 0.2),
+      child: Text(
+        _initials(name),
+        style: TextStyle(
+          fontSize: diameter * 0.35,
+          fontWeight: FontWeight.bold,
+          color: _foregroundFor(color, theme),
+        ),
+      ),
+    );
+  }
+
+  static String _initials(String name) {
+    if (name.isEmpty) return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return '${parts[0][0]}${parts[parts.length - 1][0]}'.toUpperCase();
+  }
+
+  static Color _foregroundFor(Color background, ThemeData theme) {
+    final brightness = ThemeData.estimateBrightnessForColor(background);
+    return brightness == Brightness.dark
+        ? Colors.white
+        : theme.colorScheme.onSurface;
   }
 }
 

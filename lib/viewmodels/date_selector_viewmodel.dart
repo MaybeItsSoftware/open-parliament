@@ -17,6 +17,38 @@ class PartyContribution {
   const PartyContribution({required this.partyToken, required this.count});
 }
 
+/// One speaker's engagement in a single debate, used to rank the debate's
+/// top speakers. [partyToken] colours the avatar ring; [wordCount] drives the
+/// ranking (a proxy for how much of the debate a speaker dominated) while
+/// [contributionCount] is the number shown on the card.
+class SpeakerContribution {
+  final String name;
+  final String? partyToken;
+  final int contributionCount;
+  final int wordCount;
+  final String? thumbnailUrl;
+
+  const SpeakerContribution({
+    required this.name,
+    this.partyToken,
+    required this.contributionCount,
+    required this.wordCount,
+    this.thumbnailUrl,
+  });
+}
+
+/// Mutable accumulator for a single speaker's stats within one root debate,
+/// used only while assembling the feed in [DateSelectorViewModel._assembleDebateFeed].
+class _SpeakerAgg {
+  String name;
+  String? partyToken;
+  String? thumbnailUrl;
+  int contributionCount = 0;
+  int wordCount = 0;
+
+  _SpeakerAgg({required this.name, this.partyToken, this.thumbnailUrl});
+}
+
 /// One row in the debate feed shown on the landing page for a sitting day.
 class DebateFeedItem {
   final String title;
@@ -37,6 +69,10 @@ class DebateFeedItem {
   /// that could be resolved are included; may be empty.
   final List<PartyContribution> partyBreakdown;
 
+  /// The debate's most engaged speakers, sorted by word count descending
+  /// (capped at 3). May be empty.
+  final List<SpeakerContribution> topSpeakers;
+
   /// The bill this debate relates to (parsed from [title]), or `null` if the
   /// title doesn't name a bill. Used to deep-link to bills.parliament.uk.
   final String? relatedBillTitle;
@@ -52,6 +88,7 @@ class DebateFeedItem {
     this.speakerCount = 0,
     this.contributionCount = 0,
     this.partyBreakdown = const <PartyContribution>[],
+    this.topSpeakers = const <SpeakerContribution>[],
     this.relatedBillTitle,
   });
 
@@ -257,6 +294,7 @@ class DateSelectorViewModel extends ChangeNotifier {
     final speakerKeysByRoot = <String, Set<String>>{};
     final contributionCountByRoot = <String, int>{};
     final partyCountsByRoot = <String, Map<String, int>>{};
+    final speakerStatsByRoot = <String, Map<String, _SpeakerAgg>>{};
     String? currentRoot;
     for (final speech in speeches) {
       if (rootIds.contains(speech.debateId)) {
@@ -281,10 +319,27 @@ class DateSelectorViewModel extends ChangeNotifier {
         if (speakerKey != null) {
           (speakerKeysByRoot[currentRoot] ??= <String>{}).add(speakerKey);
         }
-        final partyToken = _partyTokenForSpeech(speech, lookup);
+        final member = lookup != null && speech.memberId != null
+            ? lookup.memberById(speech.memberId!)
+            : null;
+        final partyToken = _partyTokenForSpeech(speech, lookup, member: member);
         if (partyToken != null) {
           final counts = partyCountsByRoot[currentRoot] ??= <String, int>{};
           counts[partyToken] = (counts[partyToken] ?? 0) + 1;
+        }
+        if (speakerKey != null) {
+          final stats = speakerStatsByRoot[currentRoot] ??=
+              <String, _SpeakerAgg>{};
+          final agg = stats.putIfAbsent(
+            speakerKey,
+            () => _SpeakerAgg(
+              name: speakerIdentityFor(speech, member).name,
+              partyToken: partyToken,
+              thumbnailUrl: member?.thumbnailUrl,
+            ),
+          );
+          agg.contributionCount += 1;
+          agg.wordCount += _wordCount(speech.speechText);
         }
       }
     }
@@ -311,6 +366,7 @@ class DateSelectorViewModel extends ChangeNotifier {
                 speakerCount: speakerKeysByRoot[d.id]?.length ?? 0,
                 contributionCount: contributionCountByRoot[d.id] ?? 0,
                 partyBreakdown: _partyBreakdown(partyCountsByRoot[d.id]),
+                topSpeakers: _topSpeakers(speakerStatsByRoot[d.id]),
                 relatedBillTitle: detectBillTitle(d.title),
               ))
           .toList();
@@ -330,6 +386,7 @@ class DateSelectorViewModel extends ChangeNotifier {
             speakerCount: speakerKeysByRoot[entry.key]?.length ?? 0,
             contributionCount: contributionCountByRoot[entry.key] ?? 0,
             partyBreakdown: _partyBreakdown(partyCountsByRoot[entry.key]),
+            topSpeakers: _topSpeakers(speakerStatsByRoot[entry.key]),
             relatedBillTitle: detectBillTitle(titleByDebateId[entry.key] ?? ''),
           ),
         )
@@ -361,12 +418,15 @@ class DateSelectorViewModel extends ChangeNotifier {
 
   /// Resolves the canonical party token for [speech]: first via the member
   /// lookup (by ID), then from any party hint in the attribution string
-  /// (e.g. "… (Lab)"). Returns `null` when nothing can be resolved.
-  static String? _partyTokenForSpeech(Speech speech, MemberLookupIndex? lookup) {
-    Member? member;
-    if (lookup != null && speech.memberId != null) {
-      member = lookup.memberById(speech.memberId!);
-    }
+  /// (e.g. "… (Lab)"). Returns `null` when nothing can be resolved. Pass an
+  /// already-resolved [member] to avoid a redundant lookup.
+  static String? _partyTokenForSpeech(
+    Speech speech,
+    MemberLookupIndex? lookup, {
+    Member? member,
+  }) {
+    member ??=
+        lookup != null && speech.memberId != null ? lookup.memberById(speech.memberId!) : null;
     if (isSpeakerRole(speakerIdentityFor(speech, member))) {
       return 'speaker';
     }
@@ -395,6 +455,34 @@ class DateSelectorViewModel extends ChangeNotifier {
     return [
       for (final e in entries)
         PartyContribution(partyToken: e.key, count: e.value),
+    ];
+  }
+
+  /// The debate's top 3 speakers by word count (ties broken by contribution
+  /// count, then name), used to populate [DebateFeedItem.topSpeakers].
+  static const int _topSpeakerCount = 3;
+
+  static List<SpeakerContribution> _topSpeakers(Map<String, _SpeakerAgg>? stats) {
+    if (stats == null || stats.isEmpty) {
+      return const <SpeakerContribution>[];
+    }
+    final aggs = stats.values.toList()
+      ..sort((a, b) {
+        final byWords = b.wordCount.compareTo(a.wordCount);
+        if (byWords != 0) return byWords;
+        final byContributions = b.contributionCount.compareTo(a.contributionCount);
+        if (byContributions != 0) return byContributions;
+        return a.name.compareTo(b.name);
+      });
+    return [
+      for (final agg in aggs.take(_topSpeakerCount))
+        SpeakerContribution(
+          name: agg.name,
+          partyToken: agg.partyToken,
+          contributionCount: agg.contributionCount,
+          wordCount: agg.wordCount,
+          thumbnailUrl: agg.thumbnailUrl,
+        ),
     ];
   }
 
