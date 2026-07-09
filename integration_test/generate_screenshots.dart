@@ -174,6 +174,16 @@ void main() {
     const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone67_2', width: 430, height: 932, pixelRatio: 3.0),
     const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone67_3', width: 430, height: 932, pixelRatio: 3.0),
 
+    // 6.1" iPhone (iPhone 12/13/14/15/16 Pro) - en-GB
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone61_1', width: 390, height: 844, pixelRatio: 3.0),
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone61_2', width: 390, height: 844, pixelRatio: 3.0),
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone61_3', width: 390, height: 844, pixelRatio: 3.0),
+
+    // 6.5" iPhone (iPhone 12/13 Pro Max, 14 Plus) - en-GB
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone65_1', width: 428, height: 926, pixelRatio: 3.0),
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone65_2', width: 428, height: 926, pixelRatio: 3.0),
+    const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone65_3', width: 428, height: 926, pixelRatio: 3.0),
+
     // 12.9" iPad Pro - en-GB
     const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/ipadPro129_1', width: 1024, height: 1366, pixelRatio: 2.0),
     const ScreenshotTarget(path: 'fastlane/screenshots/en-GB/ipadPro129_2', width: 1024, height: 1366, pixelRatio: 2.0),

@@ -140,11 +140,16 @@ platform :android do
       aab:                           File.join(ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab"),
       json_key_data:                 ENV["PLAY_SERVICE_ACCOUNT_JSON"],
       skip_upload_apk:               true,
-      # Metadata and screenshots are managed via the promote lane; keep beta
-      # uploads fast by skipping them here.
-      skip_upload_metadata:          true,
+      # Play's store listing (title/description) is global, not per-track —
+      # it goes live as soon as this edit is committed, independent of which
+      # track the binary promotes through. Upload it on every beta build so
+      # text fixes don't require a production promotion. Screenshots are
+      # skipped here since they rarely change and are slow to upload; the
+      # promote lane still pushes those alongside a production release.
+      skip_upload_metadata:          false,
       skip_upload_images:            true,
       skip_upload_screenshots:       true,
+      metadata_path:                 File.join(__dir__, "metadata", "android"),
     )
   end
 
