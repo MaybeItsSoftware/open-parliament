@@ -1,3 +1,10 @@
+## [0.5.2](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.1...v0.5.2) (2026-07-09)
+
+
+### Bug Fixes
+
+* **android:** skip metadata upload on beta builds and fix path resolution in promote ([54cffd0](https://github.com/MaybeItsSoftware/open-parliament/commit/54cffd0461fbd5d0b773441881ff38fd62249bd0))
+
 ## [0.5.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.0...v0.5.1) (2026-07-09)
 
 
