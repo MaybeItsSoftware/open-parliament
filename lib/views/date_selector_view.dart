@@ -386,10 +386,70 @@ class _DebateCardContent extends StatelessWidget {
             height >= _speakersTier && item.topSpeakers.isNotEmpty;
         final showPie = height >= _pieTier && hasParties;
 
+        // Below the title, everything else is optional "extra" content whose
+        // real height only loosely tracks the tier thresholds above (text
+        // scale, locale, and speaker-list length can all push it taller than
+        // assumed). Below the pie tier that extra content is laid out inside
+        // a non-scrolling SingleChildScrollView so it clips gracefully
+        // instead of overflowing the card when it doesn't quite fit.
+        final extraChildren = [
+          if (showChips) ...[
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 4, children: chips),
+          ],
+          if (showMeta) ...[
+            const SizedBox(height: 6),
+            Text(
+              _metaSegments(item).join('  ·  '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ];
+
+        final Widget extra;
+        if (showSpeakers && showPie) {
+          // Ample room at this tier (>= _pieTier) for the pie to flex into.
+          extra = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ...extraChildren,
+              const SizedBox(height: 8),
+              _TopSpeakersList(speakers: item.topSpeakers),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _PartyContributionPie(breakdown: item.partyBreakdown),
+              ),
+            ],
+          );
+        } else {
+          extra = SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...extraChildren,
+                // Engagement content: a thin party bar on short cards,
+                // upgrading to a top-speakers list once there's room.
+                if (showSpeakers) ...[
+                  const SizedBox(height: 8),
+                  _TopSpeakersList(speakers: item.topSpeakers),
+                ] else if (hasParties) ...[
+                  const SizedBox(height: 6),
+                  _PartyContributionBar(breakdown: item.partyBreakdown),
+                ],
+              ],
+            ),
+          );
+        }
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
@@ -405,37 +465,7 @@ class _DebateCardContent extends StatelessWidget {
                   const Icon(Icons.chevron_right),
                 ],
               ),
-              if (showChips) ...[
-                const SizedBox(height: 6),
-                Wrap(spacing: 6, runSpacing: 4, children: chips),
-              ],
-              if (showMeta) ...[
-                const SizedBox(height: 6),
-                Text(
-                  _metaSegments(item).join('  ·  '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
-              // Engagement content: a thin party bar on short cards, upgrading
-              // to a top-speakers list once there's room, and finally to the
-              // list plus a full party pie + legend on the tallest cards.
-              if (showSpeakers) ...[
-                const SizedBox(height: 8),
-                _TopSpeakersList(speakers: item.topSpeakers),
-                if (showPie) ...[
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: _PartyContributionPie(breakdown: item.partyBreakdown),
-                  ),
-                ],
-              ] else if (hasParties) ...[
-                const SizedBox(height: 6),
-                _PartyContributionBar(breakdown: item.partyBreakdown),
-              ],
+              Expanded(child: extra),
             ],
           ),
         );
@@ -775,9 +805,6 @@ class _PartyContributionPie extends StatelessWidget {
     if (total == 0) return const SizedBox.shrink();
 
     final labelStyle = Theme.of(context).textTheme.labelMedium;
-    // At most five legend rows so the column never overflows a card.
-    final legendParties = breakdown.take(5).toList();
-    final remainder = breakdown.length - legendParties.length;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -786,6 +813,34 @@ class _PartyContributionPie extends StatelessWidget {
         final maxHeight =
             constraints.maxHeight.isFinite ? constraints.maxHeight : 96.0;
         final side = maxHeight.clamp(0.0, constraints.maxWidth * 0.5);
+
+        // Calculate how many legend items can fit in the available height.
+        final textScaler = MediaQuery.textScalerOf(context);
+        final double baseFontSize = labelStyle?.fontSize ?? 12.0;
+        final double scaledFontSize = textScaler.scale(baseFontSize);
+        // Estimate row height: font size + vertical padding (2px) + a small safety margin for line-height (e.g., 4px)
+        final double itemHeight = scaledFontSize + 6.0;
+
+        int limit = 0;
+        for (int i = 1; i <= breakdown.length; i++) {
+          final remainderCount = breakdown.length - i;
+          final double neededHeight =
+              i * itemHeight + (remainderCount > 0 ? itemHeight : 0);
+          if (neededHeight <= maxHeight) {
+            limit = i;
+          } else {
+            break;
+          }
+        }
+
+        // Cap at at most 5 legend rows so it matches original design limits.
+        if (limit > 5) {
+          limit = 5;
+        }
+
+        final legendParties = limit > 0 ? breakdown.take(limit).toList() : <PartyContribution>[];
+        final remainder = limit > 0 ? breakdown.length - legendParties.length : 0;
+
         return Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
