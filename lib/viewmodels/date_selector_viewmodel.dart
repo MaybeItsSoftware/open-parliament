@@ -115,13 +115,66 @@ class DateSelectorViewModel extends ChangeNotifier {
     return distanceToPrevious <= distanceToNext ? previous : next;
   }
 
-  /// Returns the latest sitting day on or before [day] that has debates.
-  Future<DateTime?> mostRecentSittingDay(DateTime day) async {
-    final normalized = DateTime(day.year, day.month, day.day);
-    if (await hasSittingData(normalized)) {
-      return normalized;
+  /// Returns true if [day] has at least one real (non-placeholder) debate.
+  /// Unlike [hasSittingData], this excludes days whose only "debate" is a
+  /// procedural placeholder (e.g. "The House met at ... and adjourned").
+  Future<bool> hasVisibleDebates(DateTime day) async {
+    final feed = await loadDebateFeed(day);
+    return feed.isNotEmpty;
+  }
+
+  /// How many sitting-day hops [_walkToVisibleDay] and [mostRecentSittingDay]
+  /// will take before giving up. Hansard's linked-sitting-dates chain already
+  /// skips weekends/recess, so this only needs to cover runs of *consecutive*
+  /// placeholder-only sitting days, which is rare.
+  static const int _maxContentLookbackHops = 15;
+
+  /// Walks the Hansard sitting-day chain from [start], skipping
+  /// placeholder-only days, until a day with real debate content is found or
+  /// [_maxContentLookbackHops] hops are exhausted. Returns `null` if there
+  /// are no more sitting days in that direction.
+  Future<DateTime?> _walkToVisibleDay(
+    DateTime start, {
+    required bool forward,
+  }) async {
+    DateTime? candidate =
+        forward ? await nextSittingDay(start) : await previousSittingDay(start);
+    for (var hop = 0;
+        hop < _maxContentLookbackHops && candidate != null;
+        hop++) {
+      if (await hasVisibleDebates(candidate)) return candidate;
+      candidate = forward
+          ? await nextSittingDay(candidate)
+          : await previousSittingDay(candidate);
     }
-    return previousSittingDay(normalized);
+    return null;
+  }
+
+  /// Returns the next sitting day after [start] with real debate content,
+  /// skipping any placeholder-only days in between.
+  Future<DateTime?> nextVisibleSittingDay(DateTime start) =>
+      _walkToVisibleDay(start, forward: true);
+
+  /// Returns the closest sitting day before [start] with real debate content,
+  /// skipping any placeholder-only days in between.
+  Future<DateTime?> previousVisibleSittingDay(DateTime start) =>
+      _walkToVisibleDay(start, forward: false);
+
+  /// Returns the latest sitting day on or before [day] with real debate
+  /// content, walking backward past any placeholder-only days. Falls back to
+  /// the last candidate seen if the lookback is exhausted, so the caller
+  /// always has something to show rather than nothing.
+  Future<DateTime?> mostRecentSittingDay(DateTime day) async {
+    DateTime? candidate = DateTime(day.year, day.month, day.day);
+    DateTime? lastSeen;
+    for (var hop = 0;
+        hop < _maxContentLookbackHops && candidate != null;
+        hop++) {
+      lastSeen = candidate;
+      if (await hasVisibleDebates(candidate)) return candidate;
+      candidate = await previousSittingDay(candidate);
+    }
+    return lastSeen;
   }
 
   /// In-memory cache of enumerated sitting days, keyed by `YYYY-MM`.

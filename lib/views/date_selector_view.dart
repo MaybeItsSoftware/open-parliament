@@ -253,9 +253,23 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
     if (picked == null) return;
 
-    // Only real sitting days are selectable, so the choice never needs snapping.
-    vm.setFocusedDay(picked);
-    vm.selectDay(picked);
+    // The calendar only enables Hansard sitting days, but a sitting day can
+    // still turn out to be placeholder-only (e.g. "The House met at ... and
+    // adjourned") — snap those to the nearest day with real debate content.
+    var resolved = picked;
+    if (!await vm.hasVisibleDebates(picked)) {
+      resolved = await vm.previousVisibleSittingDay(picked) ?? picked;
+    }
+    if (!mounted) return;
+    if (resolved != picked) {
+      _showInfoMessage(
+        'No debates on ${_friendlyDate(picked)}; showing '
+        '${_friendlyDate(resolved)} instead.',
+      );
+    }
+
+    vm.setFocusedDay(resolved);
+    vm.selectDay(resolved);
   }
 
   Future<void> _shiftBySittingDay(
@@ -266,8 +280,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final next = deltaDays < 0
-        ? await vm.previousSittingDay(current)
-        : await vm.nextSittingDay(current);
+        ? await vm.previousVisibleSittingDay(current)
+        : await vm.nextVisibleSittingDay(current);
 
     if (next == null) {
       if (!mounted) return;
