@@ -144,10 +144,9 @@ platform :android do
       # text fixes don't require a production promotion. Screenshots are
       # skipped here since they rarely change and are slow to upload; the
       # promote lane still pushes those alongside a production release.
-      skip_upload_metadata:          false,
+      skip_upload_metadata:          true,
       skip_upload_images:            true,
       skip_upload_screenshots:       true,
-      metadata_path:                 File.join(__dir__, "metadata", "android"),
     )
   end
 
@@ -165,7 +164,7 @@ platform :android do
       skip_upload_metadata:  false,
       skip_upload_images:    false,
       skip_upload_screenshots: false,
-      metadata_path:         File.join(__dir__, "metadata", "android"),
+      metadata_path:         "metadata/android",
       # Optional staged rollout — start at 10 % and ramp via Play Console.
       # rollout: "0.1",
     )
