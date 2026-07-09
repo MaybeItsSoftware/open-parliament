@@ -1,6 +1,6 @@
 name: open_hansard
 description: Mobile app for reading UK Parliamentary debates verbatim from Hansard.
-version: 0.4.0+400
+version: 0.5.0+500
 publish_to: none
 
 environment:

@@ -1,3 +1,25 @@
+# [0.5.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.4.0...v0.5.0) (2026-07-09)
+
+
+### Bug Fixes
+
+* **calendar:** prevent debate card overflow ([806ef72](https://github.com/MaybeItsSoftware/open-parliament/commit/806ef7248e10ac92ac043e1e026bae46b7ed6349))
+
+
+### Features
+
+* **calendar:** content-aware lookback to skip empty sitting dates ([13950d3](https://github.com/MaybeItsSoftware/open-parliament/commit/13950d3dcc3582f5c54a16594354d7b193d3ec4e))
+* **calendar:** show top speakers in debate cards ([b72c4c7](https://github.com/MaybeItsSoftware/open-parliament/commit/b72c4c7e2d0df3539f8845ddff2a4dc447c53e50))
+* control history ribbon painting and fixes ([d3a2f56](https://github.com/MaybeItsSoftware/open-parliament/commit/d3a2f56650eaa851ae21a0dfe6e053a2d477a590))
+* highlight search queries in transcript view ([a68cbac](https://github.com/MaybeItsSoftware/open-parliament/commit/a68cbac523b4ec6e9ff5853f6165cf20c80578ae))
+* **ios:** arrange and scale iOS screenshots for App Store Connect ([3529cb6](https://github.com/MaybeItsSoftware/open-parliament/commit/3529cb6f631b821c493cb19adb1b249f4b294d58))
+* **search:** show person avatars in search results ([999d9ec](https://github.com/MaybeItsSoftware/open-parliament/commit/999d9ecce8e55cb820b6d468aff49eb0a1daacce))
+
+
+### Performance Improvements
+
+* simplify map boundaries and split selection overlay ([303f23d](https://github.com/MaybeItsSoftware/open-parliament/commit/303f23d46b72d29fe8206b0a0379b8a5e1c77487))
+
 # [0.4.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.3.2...v0.4.0) (2026-07-08)
 
 
