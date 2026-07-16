@@ -253,12 +253,12 @@ class DateSelectorViewModel extends ChangeNotifier {
     return result;
   }
 
-  /// In-memory cache of recess-day labels, keyed by `YYYY-MM`.
-  final Map<String, Map<DateTime, String>> _recessDaysByMonth = {};
+  /// In-memory cache of recess-day periods, keyed by `YYYY-MM`.
+  final Map<String, Map<DateTime, RecessPeriod>> _recessDaysByMonth = {};
 
   /// Returns a map from each day (normalised to midnight) of the calendar
   /// month containing [month] that falls inside a named non-sitting period,
-  /// to that period's name (e.g. `"Summer recess"`).
+  /// to the covering [RecessPeriod] (the calendar shows its name and range).
   ///
   /// Days covered by a period for either house are included; the calendar
   /// only decorates days that aren't sitting days, so a day where one house
@@ -266,12 +266,12 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// Results are cached per year-month like [sittingDaysInMonth]. A failure
   /// yields an empty map (uncached, so paging back retries) — recess labels
   /// are decorative and must never block the calendar.
-  Future<Map<DateTime, String>> recessDaysInMonth(DateTime month) async {
+  Future<Map<DateTime, RecessPeriod>> recessDaysInMonth(DateTime month) async {
     final key = _monthKey(month);
     final cached = _recessDaysByMonth[key];
     if (cached != null) return cached;
 
-    final result = <DateTime, String>{};
+    final result = <DateTime, RecessPeriod>{};
     try {
       final periods = await _service.getRecessPeriods(month.year, month.month);
       final lastDayOfMonth = DateTime(month.year, month.month + 1, 0).day;
@@ -279,13 +279,13 @@ class DateSelectorViewModel extends ChangeNotifier {
         final day = DateTime(month.year, month.month, d);
         for (final RecessPeriod period in periods) {
           if (period.contains(day)) {
-            result[day] = period.description;
+            result[day] = period;
             break;
           }
         }
       }
     } catch (_) {
-      return const <DateTime, String>{};
+      return const <DateTime, RecessPeriod>{};
     }
     _recessDaysByMonth[key] = result;
     return result;

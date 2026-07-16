@@ -589,21 +589,21 @@ void main() {
     });
 
     group('recessDaysInMonth', () {
-      test('labels each day covered by a recess period', () async {
-        fakeService.recessPeriodsResult = [
-          RecessPeriod(
-            description: 'Christmas recess',
-            startDate: DateTime(2024, 12, 20),
-            endDate: DateTime(2025, 1, 6),
-            house: 'Commons',
-          ),
-        ];
+      test('maps each day covered by a recess period to that period',
+          () async {
+        final recess = RecessPeriod(
+          description: 'Christmas recess',
+          startDate: DateTime(2024, 12, 20),
+          endDate: DateTime(2025, 1, 6),
+          house: 'Commons',
+        );
+        fakeService.recessPeriodsResult = [recess];
 
         final result = await vm.recessDaysInMonth(DateTime(2024, 12));
 
         expect(result[DateTime(2024, 12, 19)], isNull);
-        expect(result[DateTime(2024, 12, 20)], 'Christmas recess');
-        expect(result[DateTime(2024, 12, 31)], 'Christmas recess');
+        expect(result[DateTime(2024, 12, 20)], recess);
+        expect(result[DateTime(2024, 12, 31)], recess);
         // Days in the next month belong to that month's map.
         expect(result.keys.every((d) => d.month == 12), isTrue);
       });
@@ -626,7 +626,7 @@ void main() {
 
         final result = await vm.recessDaysInMonth(DateTime(2024, 8));
 
-        expect(result[DateTime(2024, 8, 1)], 'Summer recess');
+        expect(result[DateTime(2024, 8, 1)]?.description, 'Summer recess');
       });
 
       test('returns empty map for a month with no recess', () async {

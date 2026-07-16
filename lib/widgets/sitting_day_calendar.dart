@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 
+import '../models/recess_period.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
 
 /// A month-view calendar, shown as a modal bottom sheet, in which only days
@@ -11,11 +12,15 @@ import '../viewmodels/date_selector_viewmodel.dart';
 /// named recess (e.g. summer recess, Christmas adjournment) get a distinct
 /// tint, with a legend under the grid naming the recess(es) in view.
 ///
+/// Tapping a recess day doesn't select it — instead the whole recess range is
+/// highlighted and a banner under the grid names the recess and its dates.
+/// Tapping any other non-recess day (or paging months) clears the highlight.
+///
 /// Tapping an enabled day pops the sheet, returning that [DateTime]. Dismissing
 /// the sheet returns `null`. The set of enabled days for the visible month is
-/// loaded lazily via [DateSelectorViewModel.sittingDaysInMonth] (recess labels
-/// via [DateSelectorViewModel.recessDaysInMonth]); a spinner covers the first
-/// load of each month (cached months render instantly).
+/// loaded lazily via [DateSelectorViewModel.sittingDaysInMonth] (recess
+/// periods via [DateSelectorViewModel.recessDaysInMonth]); a spinner covers
+/// the first load of each month (cached months render instantly).
 class SittingDayCalendar extends StatefulWidget {
   final DateSelectorViewModel viewModel;
 
@@ -37,6 +42,28 @@ class SittingDayCalendar extends StatefulWidget {
     required this.lastDay,
   });
 
+  static const List<String> _monthAbbreviations = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  /// Formats a recess range compactly: `21–25 Jul 2024` within one month,
+  /// `21 Jul – 1 Sep 2024` within one year, else `20 Dec 2024 – 6 Jan 2025`.
+  @visibleForTesting
+  static String formatRecessRange(DateTime start, DateTime end) {
+    final startMonth = _monthAbbreviations[start.month - 1];
+    final endMonth = _monthAbbreviations[end.month - 1];
+    if (start.year == end.year && start.month == end.month) {
+      if (start.day == end.day) return '${start.day} $startMonth ${start.year}';
+      return '${start.day}–${end.day} $startMonth ${start.year}';
+    }
+    if (start.year == end.year) {
+      return '${start.day} $startMonth – ${end.day} $endMonth ${start.year}';
+    }
+    return '${start.day} $startMonth ${start.year} – '
+        '${end.day} $endMonth ${end.year}';
+  }
+
   @override
   State<SittingDayCalendar> createState() => _SittingDayCalendarState();
 }
@@ -46,7 +73,11 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
 
   late DateTime _focusedMonth;
   Set<DateTime> _enabledDays = <DateTime>{};
-  Map<DateTime, String> _recessDays = <DateTime, String>{};
+  Map<DateTime, RecessPeriod> _recessDays = <DateTime, RecessPeriod>{};
+
+  /// The recess the user tapped, if any: its full range is highlighted and a
+  /// banner names it. Cleared by tapping a non-recess day or paging months.
+  RecessPeriod? _activeRecess;
   bool _loading = true;
 
   @override
@@ -66,7 +97,7 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
     final daysFuture = widget.viewModel.sittingDaysInMonth(month);
     final recessFuture = widget.viewModel.recessDaysInMonth(month);
     Set<DateTime> days;
-    Map<DateTime, String> recessDays;
+    Map<DateTime, RecessPeriod> recessDays;
     try {
       days = await daysFuture;
     } catch (_) {
@@ -75,7 +106,7 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
     try {
       recessDays = await recessFuture;
     } catch (_) {
-      recessDays = <DateTime, String>{};
+      recessDays = <DateTime, RecessPeriod>{};
     }
     if (!mounted) return;
     setState(() {
@@ -95,8 +126,8 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
     return candidate;
   }
 
-  /// The recess name covering [day], or `null` when it isn't in a recess.
-  String? _recessLabelFor(DateTime day) =>
+  /// The recess covering [day], or `null` when it isn't in a recess.
+  RecessPeriod? _recessPeriodFor(DateTime day) =>
       _recessDays[DateTime(day.year, day.month, day.day)];
 
   /// The distinct recess names visible in the focused month, in date order.
@@ -105,7 +136,9 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
       ..sort((a, b) => a.key.compareTo(b.key));
     final names = <String>[];
     for (final entry in ordered) {
-      if (!names.contains(entry.value)) names.add(entry.value);
+      if (!names.contains(entry.value.description)) {
+        names.add(entry.value.description);
+      }
     }
     return names;
   }
@@ -126,9 +159,16 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
     final disabledColor = scheme.onSurface.withValues(alpha: 0.28);
     // Recess days stay non-tappable but are grouped by a soft tertiary tint
     // so a holiday reads as one block rather than scattered "missing" days.
+    // Tapping one raises the whole range to the full-strength active style.
     final recessFill = scheme.tertiaryContainer.withValues(alpha: 0.4);
     final recessTextColor = scheme.onTertiaryContainer.withValues(alpha: 0.55);
+    final activeRecessFill = scheme.tertiaryContainer;
+    final activeRecessTextStyle = TextStyle(
+      color: scheme.onTertiaryContainer,
+      fontWeight: FontWeight.w600,
+    );
     final recessNames = _visibleRecessNames();
+    final activeRecess = _activeRecess;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.only(bottom: 8),
@@ -163,19 +203,26 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
                   calendarBuilders: CalendarBuilders(
                     // Recess days are always disabled (no sittings), so this
                     // only needs to restyle the disabled cell; returning null
-                    // falls back to the default disabled rendering.
+                    // falls back to the default disabled rendering. The
+                    // active-recess check runs on the period itself so the
+                    // highlight also covers its days in adjacent-month cells.
                     disabledBuilder: (context, day, focusedDay) {
-                      if (_recessLabelFor(day) == null) return null;
+                      final isActive = activeRecess?.contains(day) ?? false;
+                      if (!isActive && _recessPeriodFor(day) == null) {
+                        return null;
+                      }
                       return Container(
                         margin: const EdgeInsets.all(6),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: recessFill,
+                          color: isActive ? activeRecessFill : recessFill,
                           shape: BoxShape.circle,
                         ),
                         child: Text(
                           '${day.day}',
-                          style: TextStyle(color: recessTextColor),
+                          style: isActive
+                              ? activeRecessTextStyle
+                              : TextStyle(color: recessTextColor),
                         ),
                       );
                     },
@@ -197,11 +244,52 @@ class _SittingDayCalendarState extends State<SittingDayCalendar> {
                       ),
                     );
                   },
+                  onDisabledDayTapped: (day) {
+                    // Tapping a recess day highlights its range and names it;
+                    // tapping any other disabled day clears the highlight.
+                    setState(() => _activeRecess = _recessPeriodFor(day));
+                  },
                   onPageChanged: (focusedDay) {
                     _focusedMonth = DateTime(focusedDay.year, focusedDay.month);
+                    _activeRecess = null;
                     unawaited(_loadMonth(_focusedMonth));
                   },
                 ),
+                if (activeRecess != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: activeRecessFill,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            activeRecess.description,
+                            style: TextStyle(
+                              color: scheme.onTertiaryContainer,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${SittingDayCalendar.formatRecessRange(activeRecess.startDate, activeRecess.endDate)}'
+                            ' · Parliament was not sitting',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: scheme.onTertiaryContainer),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 if (recessNames.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
