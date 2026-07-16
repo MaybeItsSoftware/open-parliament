@@ -434,4 +434,93 @@ void main() {
       );
     });
   });
+
+  // ─── WhatsOnApiService tests ────────────────────────────────────────────
+
+  group('WhatsOnApiService', () {
+    test('fetchNonSittingPeriods parses events into recess periods', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse([
+          {
+            'Description': 'Christmas recess',
+            'StartDate': '2024-12-20T00:00:00',
+            'EndDate': '2025-01-06T00:00:00',
+            'House': 'Commons',
+          },
+          {
+            // No description or house — falls back to "Recess" and the
+            // queried house.
+            'StartDate': '2024-12-01T00:00:00',
+          },
+          {
+            // Unparsable start date — skipped.
+            'Description': 'Broken',
+            'StartDate': 'not-a-date',
+          },
+        ]),
+      ]);
+      final service = WhatsOnApiService(client: stub);
+
+      final periods = await service.fetchNonSittingPeriods(
+        startDate: '2024-12-01',
+        endDate: '2024-12-31',
+        house: 'Commons',
+      );
+
+      expect(periods, hasLength(2));
+      expect(periods[0].description, 'Christmas recess');
+      expect(periods[0].startDate, DateTime(2024, 12, 20));
+      expect(periods[0].endDate, DateTime(2025, 1, 6));
+      expect(periods[0].house, 'Commons');
+      expect(periods[1].description, 'Recess');
+      expect(periods[1].startDate, DateTime(2024, 12, 1));
+      expect(periods[1].endDate, DateTime(2024, 12, 1));
+      expect(periods[1].house, 'Commons');
+    });
+
+    test('fetchNonSittingPeriods sends the date range and house', () async {
+      final capturing = _CapturingHttpClient('[]');
+      final service = WhatsOnApiService(client: capturing);
+
+      await service.fetchNonSittingPeriods(
+        startDate: '2024-12-01',
+        endDate: '2024-12-31',
+        house: 'Lords',
+      );
+
+      final uri = capturing.requests.single;
+      expect(uri.host, 'whatson-api.parliament.uk');
+      expect(uri.path, '/calendar/events/nonsitting.json');
+      expect(uri.queryParameters['startDate'], '2024-12-01');
+      expect(uri.queryParameters['endDate'], '2024-12-31');
+      expect(uri.queryParameters['house'], 'Lords');
+    });
+
+    test('fetchNonSittingPeriods returns empty list on HTTP error', () async {
+      final stub = _StubHttpClient([http.Response('', 500)]);
+      final service = WhatsOnApiService(client: stub);
+
+      final periods = await service.fetchNonSittingPeriods(
+        startDate: '2024-12-01',
+        endDate: '2024-12-31',
+        house: 'Commons',
+      );
+
+      expect(periods, isEmpty);
+    });
+
+    test('fetchNonSittingPeriods returns empty list on malformed body',
+        () async {
+      final stub = _StubHttpClient([http.Response('not json', 200)]);
+      final service = WhatsOnApiService(client: stub);
+
+      final periods = await service.fetchNonSittingPeriods(
+        startDate: '2024-12-01',
+        endDate: '2024-12-31',
+        house: 'Commons',
+      );
+
+      expect(periods, isEmpty);
+    });
+  });
 }

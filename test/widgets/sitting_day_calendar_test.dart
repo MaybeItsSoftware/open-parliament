@@ -13,14 +13,22 @@ class _NoopService implements ParliamentaryDataService {
       throw UnimplementedError('${invocation.memberName} not stubbed');
 }
 
-/// A view-model whose `sittingDaysInMonth` returns a fixed set, so the widget
-/// renders deterministically without any network or async walk.
+/// A view-model whose `sittingDaysInMonth` / `recessDaysInMonth` return fixed
+/// values, so the widget renders deterministically without any network or
+/// async walk.
 class _StubViewModel extends DateSelectorViewModel {
   final Set<DateTime> days;
-  _StubViewModel(this.days) : super(_NoopService());
+  final Map<DateTime, String> recessDays;
+
+  _StubViewModel(this.days, {this.recessDays = const {}})
+      : super(_NoopService());
 
   @override
   Future<Set<DateTime>> sittingDaysInMonth(DateTime month) async => days;
+
+  @override
+  Future<Map<DateTime, String>> recessDaysInMonth(DateTime month) async =>
+      recessDays;
 }
 
 void main() {
@@ -167,6 +175,84 @@ void main() {
 
     // The 6th is not a sitting day, so the sheet stays open.
     await tester.tap(find.text('6'));
+    await tester.pumpAndSettle();
+
+    expect(captured, isFalse);
+    expect(result, isNull);
+    expect(find.byType(TableCalendar<void>), findsOneWidget);
+  });
+
+  testWidgets('recess days are marked distinctly and named in a legend',
+      (tester) async {
+    // The 4th sits; the 11th–15th are a recess; the 7th is plain non-sitting.
+    final vm = _StubViewModel(
+      {DateTime(2024, 11, 4)},
+      recessDays: {
+        for (var d = 11; d <= 15; d++)
+          DateTime(2024, 11, d): 'November recess',
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SittingDayCalendar(
+            viewModel: vm,
+            initialMonth: DateTime(2024, 11),
+            selectedDay: null,
+            lastDay: DateTime(2025, 1, 1),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The legend names the recess visible in this month.
+    expect(find.text('November recess'), findsOneWidget);
+
+    // A recess day is styled unlike both a sitting day and a plain
+    // non-sitting day.
+    final sitting = tester.widget<Text>(find.text('4'));
+    final nonSitting = tester.widget<Text>(find.text('7'));
+    final recess = tester.widget<Text>(find.text('12'));
+    expect(recess.style?.color, isNot(sitting.style?.color));
+    expect(recess.style?.color, isNot(nonSitting.style?.color));
+  });
+
+  testWidgets('tapping a recess day does nothing', (tester) async {
+    final vm = _StubViewModel(
+      {DateTime(2024, 11, 4)},
+      recessDays: {DateTime(2024, 11, 12): 'November recess'},
+    );
+    DateTime? result;
+    var captured = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                result = await showModalBottomSheet<DateTime>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => SittingDayCalendar(
+                    viewModel: vm,
+                    initialMonth: DateTime(2024, 11),
+                    selectedDay: DateTime(2024, 11, 4),
+                    lastDay: DateTime(2025, 1, 1),
+                  ),
+                );
+                captured = true;
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('12'));
     await tester.pumpAndSettle();
 
     expect(captured, isFalse);

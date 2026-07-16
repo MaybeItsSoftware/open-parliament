@@ -10,6 +10,7 @@ Public APIs consumed:
 
 - **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id), `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share), and `…/Members/Parties/StateOfTheParties/{house}/{date}` (party composition of a house on a date, used by the hemicycle seating view and party profile). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
 - **Hansard API** — debate sections + speeches per sitting day.
+- **What's On API** — `https://whatson-api.parliament.uk/calendar/events/nonsitting.json?startDate=&endDate=&house=` — named non-sitting periods per house (e.g. *"Summer recess"*, Christmas adjournment, dissolution). Backs the recess tint + legend in the sitting-day calendar (`WhatsOnApiService`). Best-effort: any failure yields an unmarked (but still fully usable) calendar.
 - **Bills API** — `https://bills-api.parliament.uk/api/v1/Bills` — bill search/detail/stages/news and upcoming committee sittings, backing the Bills list/detail views and the debate-title → bill deep-link (`BillsApiService`).
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
 - **ONS Open Geography (ArcGIS)** — Westminster constituency and local-authority-district boundary polygons for the national control map (`BoundaryApiService`).
@@ -81,6 +82,7 @@ lib/
 │   ├── member.dart           # MP profile (id, name, party, portrait)
 │   ├── parliament_live_event.dart # A parliamentlive.tv broadcast (guid, title)
 │   ├── party_stats.dart      # A party's current/historical seat count
+│   ├── recess_period.dart    # A named non-sitting period (recess/adjournment)
 │   ├── saved_speech.dart     # A bookmarked speech (Settings → Saved)
 │   └── speech.dart           # A single contribution + procedural-row classifiers
 ├── services/

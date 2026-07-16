@@ -11,6 +11,7 @@ import '../models/council.dart';
 import '../models/councillor.dart';
 import '../models/councillor_profile.dart';
 import '../models/parliament_live_event.dart';
+import '../models/recess_period.dart';
 import '../models/speech.dart';
 import '../utils/area_match.dart';
 import '../utils/council_control.dart';
@@ -712,6 +713,60 @@ class LinkedSittingDates {
     required this.previousSittingDate,
     required this.nextSittingDate,
   });
+}
+
+/// Low-level HTTP client for the official Parliament "What's On" API.
+///
+/// Endpoint: https://whatson-api.parliament.uk — the canonical source for
+/// recesses and other named non-sitting periods (conference recess,
+/// Christmas adjournment, dissolution, …).
+class WhatsOnApiService {
+  static const String _baseUrl = 'https://whatson-api.parliament.uk';
+
+  final http.Client _client;
+
+  WhatsOnApiService({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Fetches the non-sitting periods for [house] (`Commons` or `Lords`)
+  /// overlapping [startDate]..[endDate] (both `YYYY-MM-DD`, inclusive) via
+  /// `/calendar/events/nonsitting.json`.
+  ///
+  /// Best-effort: returns an empty list on any HTTP or parse failure, since
+  /// recess labels only decorate the calendar and must never block it.
+  Future<List<RecessPeriod>> fetchNonSittingPeriods({
+    required String startDate,
+    required String endDate,
+    required String house,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/calendar/events/nonsitting.json').replace(
+      queryParameters: {
+        'startDate': startDate,
+        'endDate': endDate,
+        'house': house,
+      },
+    );
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return const [];
+      final body = jsonDecode(response.body);
+      if (body is! List) return const [];
+      final periods = <RecessPeriod>[];
+      for (final item in body) {
+        if (item is! Map<String, dynamic>) continue;
+        final period = RecessPeriod.fromApiJson(item, fallbackHouse: house);
+        if (period != null) periods.add(period);
+      }
+      return periods;
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return const [];
+    }
+  }
+
+  void dispose() => _client.close();
 }
 
 /// Scrapes parliamentlive.tv's public search page to map a sitting day to
