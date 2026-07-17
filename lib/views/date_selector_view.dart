@@ -25,7 +25,10 @@ class DateSelectorView extends StatefulWidget {
 class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
 
-  static const double _minDebateCardHeight = 72;
+  // Tall enough that even the shortest debates (which get clamped to this
+  // height) have room for a 2-line title — see _DebateCardContent, which
+  // always allows 2 title lines on narrow screens regardless of card height.
+  static const double _minDebateCardHeight = 92;
   static const double _pixelsPerMinute = 3.5;
 
   /// True until [_initializeLandingDay] resolves. While `true`, the
@@ -391,11 +394,20 @@ class _DebateCardContent extends StatelessWidget {
   static const double _speakersTier = 190;
   static const double _pieTier = 270;
 
+  // Below this card width, a single line of title text holds too few
+  // characters for titles to be usable in their 1-line form (bill/motion
+  // titles are frequently long), so narrow cards always get 2 lines
+  // regardless of the height-driven tier below.
+  static const double _narrowWidth = 400;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final height = constraints.maxHeight;
+        final width = constraints.maxWidth;
+        final isNarrow = width < _narrowWidth;
+        final titleMaxLines = isNarrow ? 2 : (height >= _metaTier ? 2 : 1);
         final hasParties = item.partyBreakdown.isNotEmpty;
         final showMeta = height >= _metaTier && _metaSegments(item).isNotEmpty;
         final chips = _contextChips(context);
@@ -473,11 +485,18 @@ class _DebateCardContent extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      item.title,
-                      maxLines: height >= _metaTier ? 2 : 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    // Even at 2 lines, long bill/motion titles can still be
+                    // clipped — the Tooltip guarantees the full title is
+                    // always readable via long-press (or hover on desktop),
+                    // rather than the ellipsis being a dead end.
+                    child: Tooltip(
+                      message: item.title,
+                      child: Text(
+                        item.title,
+                        maxLines: titleMaxLines,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
                   const Icon(Icons.chevron_right),

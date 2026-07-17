@@ -1,6 +1,11 @@
-// Regression test for the date-selector top bar: tapping the date label
-// should open the sitting-day calendar picker (the same as the calendar
-// icon), not jump straight into a debate transcript.
+// Regression tests for the date-selector home screen:
+// - tapping the date label should open the sitting-day calendar picker (the
+//   same as the calendar icon), not jump straight into a debate transcript.
+// - long debate titles in the home-screen debate feed should remain readable
+//   on narrow (phone-width) screens: narrow cards always get 2 title lines
+//   instead of being capped at 1 by the card's height tier, and a Tooltip
+//   carrying the full title is always attached as a fallback for titles too
+//   long even for that.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +26,14 @@ import 'package:open_hansard/views/date_selector_view.dart';
 import 'package:open_hansard/views/transcript_view.dart';
 import 'package:open_hansard/widgets/sitting_day_calendar.dart';
 
+const _longTitle =
+    'Motion to Approve the Comprehensive Report on the Reform of '
+    'Environmental, Social and Economic Policy Affecting Rural Communities '
+    'and Coastal Infrastructure Bill';
+
+/// A [ParliamentaryDataService] that serves a single, very short debate with
+/// a long title for every date — enough to drive the debate feed without
+/// hitting the network.
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<List<Member>> getMembers() async => const [];
@@ -95,7 +108,14 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<Member?> fetchAndCacheMemberById(int id) async => null;
 
   @override
-  Future<List<Debate>> getDebatesForDate(String date) async => const [];
+  Future<List<Debate>> getDebatesForDate(String date) async => const [
+        Debate(
+          id: 'debate-1',
+          title: _longTitle,
+          house: 'Commons',
+          orderIndex: 0,
+        ),
+      ];
 
   @override
   Future<List<Map<String, dynamic>>> searchCachedDebates(
@@ -184,24 +204,28 @@ final RegExp _friendlyDatePattern = RegExp(
   r'\d{4}$',
 );
 
+Future<void> _pumpDebateFeed(WidgetTester tester) async {
+  final fakeService = _FakeParliamentaryDataService();
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: ThemeService()),
+        Provider<ParliamentaryDataService>.value(value: fakeService),
+      ],
+      child: const MaterialApp(
+        home: DateSelectorView(),
+      ),
+    ),
+  );
+  // Settle the async landing-day lookup and the debate feed's FutureBuilder.
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets(
     'tapping the date label opens the date picker, not a transcript',
     (tester) async {
-      final fakeService = _FakeParliamentaryDataService();
-
-      await tester.pumpWidget(
-        MultiProvider(
-          providers: [
-            ChangeNotifierProvider.value(value: ThemeService()),
-            Provider<ParliamentaryDataService>.value(value: fakeService),
-          ],
-          child: const MaterialApp(
-            home: DateSelectorView(),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpDebateFeed(tester);
 
       final dateLabel = find.byWidgetPredicate(
         (widget) =>
@@ -214,6 +238,66 @@ void main() {
 
       expect(find.byType(SittingDayCalendar), findsOneWidget);
       expect(find.byType(TranscriptView), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'long debate title is readable on a narrow phone screen',
+    (tester) async {
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1.0;
+
+      await _pumpDebateFeed(tester);
+
+      // The card must be short (duration falls back to 0 with no speeches,
+      // clamping to the minimum card height) — exactly the case where the
+      // old height-only tiering capped the title at 1 line.
+      final titleFinder = find.text(_longTitle);
+      expect(titleFinder, findsOneWidget);
+
+      final titleText = tester.widget<Text>(titleFinder);
+      // Narrow cards always get 2 lines, not just 1, so far more of a long
+      // title is visible up front instead of being cut after a few words.
+      expect(titleText.maxLines, 2);
+
+      // Even 2 lines won't always be enough for very long bill/motion
+      // titles, so a Tooltip carrying the *full* title must always be
+      // attached — the full title is never a dead end behind an ellipsis.
+      final tooltipFinder = find.ancestor(
+        of: titleFinder,
+        matching: find.byType(Tooltip),
+      );
+      expect(tooltipFinder, findsOneWidget);
+      final tooltip = tester.widget<Tooltip>(tooltipFinder);
+      expect(tooltip.message, _longTitle);
+
+      // No overflow/render errors from the 2-line title at the minimum card
+      // height.
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'short debate card on a wide screen keeps the original 1-line title',
+    (tester) async {
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+
+      await _pumpDebateFeed(tester);
+
+      final titleFinder = find.text(_longTitle);
+      expect(titleFinder, findsOneWidget);
+
+      final titleText = tester.widget<Text>(titleFinder);
+      // Wide/tablet layouts are unchanged: a short card still shows 1 line,
+      // relying on the Tooltip (still present) for the rest.
+      expect(titleText.maxLines, 1);
+
+      expect(tester.takeException(), isNull);
     },
   );
 }
