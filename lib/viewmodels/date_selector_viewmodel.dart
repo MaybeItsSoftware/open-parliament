@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/recess_period.dart';
 import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/member_lookup_index.dart';
@@ -249,6 +250,44 @@ class DateSelectorViewModel extends ChangeNotifier {
     }
 
     _sittingDaysByMonth[key] = result;
+    return result;
+  }
+
+  /// In-memory cache of recess-day periods, keyed by `YYYY-MM`.
+  final Map<String, Map<DateTime, RecessPeriod>> _recessDaysByMonth = {};
+
+  /// Returns a map from each day (normalised to midnight) of the calendar
+  /// month containing [month] that falls inside a named non-sitting period,
+  /// to the covering [RecessPeriod] (the calendar shows its name and range).
+  ///
+  /// Days covered by a period for either house are included; the calendar
+  /// only decorates days that aren't sitting days, so a day where one house
+  /// sat while the other was in recess still renders as a sitting day.
+  /// Results are cached per year-month like [sittingDaysInMonth]. A failure
+  /// yields an empty map (uncached, so paging back retries) — recess labels
+  /// are decorative and must never block the calendar.
+  Future<Map<DateTime, RecessPeriod>> recessDaysInMonth(DateTime month) async {
+    final key = _monthKey(month);
+    final cached = _recessDaysByMonth[key];
+    if (cached != null) return cached;
+
+    final result = <DateTime, RecessPeriod>{};
+    try {
+      final periods = await _service.getRecessPeriods(month.year, month.month);
+      final lastDayOfMonth = DateTime(month.year, month.month + 1, 0).day;
+      for (var d = 1; d <= lastDayOfMonth; d++) {
+        final day = DateTime(month.year, month.month, d);
+        for (final RecessPeriod period in periods) {
+          if (period.contains(day)) {
+            result[day] = period;
+            break;
+          }
+        }
+      }
+    } catch (_) {
+      return const <DateTime, RecessPeriod>{};
+    }
+    _recessDaysByMonth[key] = result;
     return result;
   }
 

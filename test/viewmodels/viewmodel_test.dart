@@ -7,6 +7,7 @@ import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/election_result.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
+import 'package:open_hansard/models/recess_period.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:latlong2/latlong.dart';
@@ -50,6 +51,12 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Set<DateTime> Function(int year, int month)? sittingDatesBuilder;
   Set<DateTime> sittingDatesResult = <DateTime>{};
   int getSittingDatesCalls = 0;
+
+  /// Fixed result / error for [getRecessPeriods]; [getRecessPeriodsCalls]
+  /// counts every invocation.
+  List<RecessPeriod> recessPeriodsResult = const <RecessPeriod>[];
+  Object? recessPeriodsError;
+  int getRecessPeriodsCalls = 0;
   List<Speech> speechesResult = [];
   List<Member> membersResult = [];
   Map<int, Member?> memberResults = {};
@@ -145,6 +152,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
     final builder = sittingDatesBuilder;
     if (builder != null) return builder(year, month);
     return sittingDatesResult;
+  }
+
+  @override
+  Future<List<RecessPeriod>> getRecessPeriods(int year, int month) async {
+    getRecessPeriodsCalls++;
+    if (recessPeriodsError != null) throw recessPeriodsError!;
+    return recessPeriodsResult;
   }
 
   @override
@@ -571,6 +585,81 @@ void main() {
         await vm.sittingDaysInMonth(DateTime(2024, 11));
 
         expect(fakeService.getSittingDatesCalls, 1);
+      });
+    });
+
+    group('recessDaysInMonth', () {
+      test('maps each day covered by a recess period to that period',
+          () async {
+        final recess = RecessPeriod(
+          description: 'Christmas recess',
+          startDate: DateTime(2024, 12, 20),
+          endDate: DateTime(2025, 1, 6),
+          house: 'Commons',
+        );
+        fakeService.recessPeriodsResult = [recess];
+
+        final result = await vm.recessDaysInMonth(DateTime(2024, 12));
+
+        expect(result[DateTime(2024, 12, 19)], isNull);
+        expect(result[DateTime(2024, 12, 20)], recess);
+        expect(result[DateTime(2024, 12, 31)], recess);
+        // Days in the next month belong to that month's map.
+        expect(result.keys.every((d) => d.month == 12), isTrue);
+      });
+
+      test('first matching period wins when houses overlap', () async {
+        fakeService.recessPeriodsResult = [
+          RecessPeriod(
+            description: 'Summer recess',
+            startDate: DateTime(2024, 7, 23),
+            endDate: DateTime(2024, 8, 30),
+            house: 'Commons',
+          ),
+          RecessPeriod(
+            description: 'Summer adjournment',
+            startDate: DateTime(2024, 7, 30),
+            endDate: DateTime(2024, 8, 30),
+            house: 'Lords',
+          ),
+        ];
+
+        final result = await vm.recessDaysInMonth(DateTime(2024, 8));
+
+        expect(result[DateTime(2024, 8, 1)]?.description, 'Summer recess');
+      });
+
+      test('returns empty map for a month with no recess', () async {
+        final result = await vm.recessDaysInMonth(DateTime(2024, 11));
+
+        expect(result, isEmpty);
+      });
+
+      test('caches the result so a second call makes no service call',
+          () async {
+        await vm.recessDaysInMonth(DateTime(2024, 12));
+        await vm.recessDaysInMonth(DateTime(2024, 12));
+
+        expect(fakeService.getRecessPeriodsCalls, 1);
+      });
+
+      test('a service failure yields an empty, uncached map', () async {
+        fakeService.recessPeriodsError = Exception('offline');
+
+        final failed = await vm.recessDaysInMonth(DateTime(2024, 12));
+        expect(failed, isEmpty);
+
+        fakeService.recessPeriodsError = null;
+        fakeService.recessPeriodsResult = [
+          RecessPeriod(
+            description: 'Christmas recess',
+            startDate: DateTime(2024, 12, 20),
+            endDate: DateTime(2025, 1, 6),
+          ),
+        ];
+
+        final retried = await vm.recessDaysInMonth(DateTime(2024, 12));
+        expect(retried, isNotEmpty);
       });
     });
   });

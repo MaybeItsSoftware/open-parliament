@@ -17,6 +17,7 @@ import 'package:open_hansard/models/debate.dart';
 import 'package:open_hansard/models/election_result.dart';
 import 'package:open_hansard/models/member.dart';
 import 'package:open_hansard/models/parliament_live_event.dart';
+import 'package:open_hansard/models/recess_period.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:open_hansard/services/theme_service.dart';
@@ -120,6 +121,10 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<Set<DateTime>> getSittingDates(int year, int month) async =>
       <DateTime>{};
+
+  @override
+  Future<List<RecessPeriod>> getRecessPeriods(int year, int month) async =>
+      const [];
 
   @override
   Future<int> wipeDebateCache() async => 0;

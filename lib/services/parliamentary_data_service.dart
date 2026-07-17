@@ -8,6 +8,7 @@ import '../models/debate.dart';
 import '../models/election_result.dart';
 import '../models/member.dart';
 import '../models/parliament_live_event.dart';
+import '../models/recess_period.dart';
 import '../models/speech.dart';
 import '../utils/area_match.dart';
 import '../utils/parliament_live.dart' as live_match;
@@ -27,6 +28,7 @@ class ParliamentaryDataService {
   final DatabaseService _db;
   final MembersApiService _membersApi;
   final HansardApiService _hansardApi;
+  final WhatsOnApiService _whatsOnApi;
   final ParliamentLiveApiService _liveApi;
   final BillsApiService _billsApi;
   final BoundaryService _boundaryService;
@@ -40,6 +42,7 @@ class ParliamentaryDataService {
     DatabaseService? databaseService,
     MembersApiService? membersApiService,
     HansardApiService? hansardApiService,
+    WhatsOnApiService? whatsOnApiService,
     ParliamentLiveApiService? parliamentLiveApiService,
     BillsApiService? billsApiService,
     BoundaryService? boundaryService,
@@ -49,6 +52,7 @@ class ParliamentaryDataService {
   })  : _db = databaseService ?? DatabaseService(),
         _membersApi = membersApiService ?? MembersApiService(),
         _hansardApi = hansardApiService ?? HansardApiService(),
+        _whatsOnApi = whatsOnApiService ?? WhatsOnApiService(),
         _liveApi = parliamentLiveApiService ?? ParliamentLiveApiService(),
         _billsApi = billsApiService ?? BillsApiService(),
         _boundaryService = boundaryService ?? BoundaryService(),
@@ -384,6 +388,28 @@ class ParliamentaryDataService {
     }
     return result;
   }
+
+  /// Returns the named non-sitting periods (recesses, holiday adjournments,
+  /// dissolution) overlapping [month] of [year], across both houses, via the
+  /// What's On API. Best-effort: an unreachable API yields an empty list.
+  Future<List<RecessPeriod>> getRecessPeriods(int year, int month) async {
+    final firstDay = _formatCalendarDate(DateTime(year, month, 1));
+    final lastDay = _formatCalendarDate(DateTime(year, month + 1, 0));
+    final result = <RecessPeriod>[];
+    for (final house in const ['Commons', 'Lords']) {
+      result.addAll(await _whatsOnApi.fetchNonSittingPeriods(
+        startDate: firstDay,
+        endDate: lastDay,
+        house: house,
+      ));
+    }
+    return result;
+  }
+
+  static String _formatCalendarDate(DateTime day) =>
+      '${day.year.toString().padLeft(4, '0')}-'
+      '${day.month.toString().padLeft(2, '0')}-'
+      '${day.day.toString().padLeft(2, '0')}';
 
   Future<bool> _isMembersCacheFresh(Database db) async {
     final rows = await db.query(
