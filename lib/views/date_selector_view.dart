@@ -174,7 +174,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           ),
           Expanded(
             child: GestureDetector(
-              onTap: () => _navigateToTranscript(selectedDay),
+              onTap: () => _pickDate(vm, selectedDay),
               child: Text(
                 _friendlyDate(selectedDay),
                 textAlign: TextAlign.center,
