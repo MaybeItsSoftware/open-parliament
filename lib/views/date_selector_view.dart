@@ -28,6 +28,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   static const double _minDebateCardHeight = 72;
   static const double _pixelsPerMinute = 3.5;
 
+  /// True until [_initializeLandingDay] resolves. While `true`, the
+  /// view-model's focused day is still its raw `DateTime.now()` default and
+  /// hasn't been vetted for content, so the debates feed shows a loading
+  /// state instead of "today" (which would otherwise flash a false "no
+  /// debates" card whenever today turns out to have none).
+  bool _resolvingLandingDay = true;
+
   @override
   void initState() {
     super.initState();
@@ -45,10 +52,14 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   Future<void> _initializeLandingDay() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final latestDay = await _vm.mostRecentSittingDay(today);
-    if (latestDay == null) return;
-    _vm.setFocusedDay(latestDay);
-    _vm.selectDay(latestDay);
+    try {
+      final latestDay = await _vm.mostRecentSittingDay(today);
+      if (latestDay == null) return;
+      _vm.setFocusedDay(latestDay);
+      _vm.selectDay(latestDay);
+    } finally {
+      if (mounted) setState(() => _resolvingLandingDay = false);
+    }
   }
 
   @override
@@ -200,6 +211,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 
   Widget _buildDebatesFeed(DateSelectorViewModel vm, DateTime day) {
+    if (_resolvingLandingDay) {
+      // Landing-day resolution hasn't finished, so `day` is still the raw
+      // "today" default and hasn't been checked for content — show a loading
+      // state rather than a premature "no debates" card for a day we may be
+      // about to navigate away from.
+      return const Center(child: CircularProgressIndicator());
+    }
     return FutureBuilder<List<DebateFeedItem>>(
       future: vm.loadDebateFeed(day),
       builder: (context, snapshot) {

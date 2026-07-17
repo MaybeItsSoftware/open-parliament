@@ -5,6 +5,8 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -21,9 +23,22 @@ import 'package:open_hansard/models/recess_period.dart';
 import 'package:open_hansard/models/speech.dart';
 import 'package:open_hansard/services/parliamentary_data_service.dart';
 import 'package:open_hansard/services/theme_service.dart';
+import 'package:open_hansard/viewmodels/date_selector_viewmodel.dart';
 import 'package:open_hansard/views/date_selector_view.dart';
 
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
+  /// Per-date scripted content, keyed by `YYYY-MM-DD`. Dates not present
+  /// return no debates/speeches (i.e. no visible content).
+  Map<String, List<Debate>> debatesByDate = {};
+  Map<String, List<Speech>> speechesByDate = {};
+
+  /// Scripts [getPreviousSittingDate]; may throw to simulate a network
+  /// failure. Optionally gated by [previousSittingDateGate] so a test can
+  /// pause resolution mid-flight and observe the loading state.
+  DateTime? Function(String date)? previousSittingDateBuilder;
+  Completer<void>? previousSittingDateGate;
+  int previousSittingDateCalls = 0;
+
   @override
   Future<List<Member>> getMembers() async => const [];
 
@@ -91,13 +106,15 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   ) async {}
 
   @override
-  Future<List<Speech>> getSpeeches(String date) async => const [];
+  Future<List<Speech>> getSpeeches(String date) async =>
+      speechesByDate[date] ?? const [];
 
   @override
   Future<Member?> fetchAndCacheMemberById(int id) async => null;
 
   @override
-  Future<List<Debate>> getDebatesForDate(String date) async => const [];
+  Future<List<Debate>> getDebatesForDate(String date) async =>
+      debatesByDate[date] ?? const [];
 
   @override
   Future<List<Map<String, dynamic>>> searchCachedDebates(
@@ -113,7 +130,13 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<bool> hasSittingData(String date) async => true;
 
   @override
-  Future<DateTime?> getPreviousSittingDate(String date) async => null;
+  Future<DateTime?> getPreviousSittingDate(String date) async {
+    previousSittingDateCalls++;
+    if (previousSittingDateGate != null) {
+      await previousSittingDateGate!.future;
+    }
+    return previousSittingDateBuilder?.call(date);
+  }
 
   @override
   Future<DateTime?> getNextSittingDate(String date) async => null;
@@ -199,5 +222,109 @@ void main() {
     await tester.pump();
 
     expect(find.text('Today’s Key Debates'), findsOneWidget);
+  });
+
+  testWidgets(
+      'shows a loading state while the landing day is still being resolved, '
+      'then lands on the most recent day with real content instead of a '
+      'premature "no debates" card', (tester) async {
+    final fakeService = _FakeParliamentaryDataService();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayKey = DateSelectorViewModel.formatDate(today);
+    final priorDay = today.subtract(const Duration(days: 3));
+    final priorKey = DateSelectorViewModel.formatDate(priorDay);
+
+    const realDebate = Debate(
+      id: 'd-real',
+      title: 'Oral Answers to Questions',
+      house: 'Commons',
+      orderIndex: 0,
+    );
+    const realSpeech = Speech(
+      id: 's1',
+      debateId: 'd-real',
+      debateTitle: 'Oral Answers to Questions',
+      memberId: 1,
+      memberName: 'Alice',
+      attributedTo: 'Alice',
+      speechText: 'A real contribution.',
+      orderIndex: 0,
+    );
+    // Today has no content; the prior day does. Nothing is scripted for
+    // `todayKey` so it stays empty (no debates).
+    fakeService.debatesByDate[priorKey] = [realDebate];
+    fakeService.speechesByDate[priorKey] = [realSpeech];
+
+    // Walking back from today hits one transient failure before recovering
+    // — simulates a network blip during landing-day resolution, which used
+    // to propagate unhandled and strand the app on "today" forever.
+    var previousSittingDateAttempts = 0;
+    fakeService.previousSittingDateBuilder = (date) {
+      previousSittingDateAttempts++;
+      if (previousSittingDateAttempts == 1) {
+        throw Exception('network blip');
+      }
+      return date == todayKey ? priorDay : null;
+    };
+    // Gate resolution so the test can observe the pre-resolution frame.
+    fakeService.previousSittingDateGate = Completer<void>();
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ThemeService()),
+          Provider<ParliamentaryDataService>.value(value: fakeService),
+        ],
+        child: const MaterialApp(
+          home: DateSelectorView(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Still resolving: a loading indicator is shown, not a "no debates"
+    // card for today (which hasn't actually been vetted for content yet).
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.textContaining('No debates are available'), findsNothing);
+
+    // Let resolution proceed: the gated call fails once, retries, and the
+    // walk lands on the prior day with real content.
+    fakeService.previousSittingDateGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('No debates are available'), findsNothing);
+    expect(find.text('Oral Answers to Questions'), findsOneWidget);
+  });
+
+  testWidgets(
+      'degrades gracefully (no crash, no permanent loading state) when the '
+      'sitting-day walk persistently fails', (tester) async {
+    final fakeService = _FakeParliamentaryDataService();
+    // getDebatesForDate/getSpeeches default to empty for every date, so
+    // today never has content; every attempt to walk backward also fails,
+    // simulating a fully offline device.
+    fakeService.previousSittingDateBuilder = (_) =>
+        throw Exception('offline');
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ThemeService()),
+          Provider<ParliamentaryDataService>.value(value: fakeService),
+        ],
+        child: const MaterialApp(
+          home: DateSelectorView(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Resolution must still complete deterministically — no unhandled
+    // exception, and no indefinitely-stuck loading spinner.
+    expect(tester.takeException(), isNull);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 }
