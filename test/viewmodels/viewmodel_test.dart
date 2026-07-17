@@ -516,6 +516,93 @@ void main() {
       });
     });
 
+    group('landing-day resolution survives sitting-day-walk failures', () {
+      const placeholderDate = '2024-11-06';
+      const placeholderDebate = Debate(
+        id: 'd-placeholder',
+        title: 'The House met at 11.30 am',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realDebate = Debate(
+        id: 'd-real',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realSpeech = Speech(
+        id: 's1',
+        debateId: 'd-real',
+        debateTitle: 'Oral Answers to Questions',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice',
+        speechText: 'A real contribution.',
+        orderIndex: 0,
+      );
+
+      test(
+          'mostRecentSittingDay recovers from a single transient '
+          'getPreviousSittingDate failure and still finds the previous '
+          'real day', () async {
+        fakeService.debatesForDateBuilder =
+            (date) => date == placeholderDate ? [placeholderDebate] : [realDebate];
+        fakeService.speechesForDateBuilder =
+            (date) => date == placeholderDate ? [] : [realSpeech];
+
+        var calls = 0;
+        fakeService.previousSittingDateBuilder = (date) {
+          calls++;
+          // The very first hop (walking back from the placeholder-only
+          // today) hits a transient failure; every subsequent call succeeds.
+          if (calls == 1) throw Exception('network blip');
+          return date == placeholderDate ? DateTime(2024, 11, 5) : null;
+        };
+
+        final result = await vm.mostRecentSittingDay(DateTime(2024, 11, 6));
+        expect(result, DateTime(2024, 11, 5));
+        // One failed attempt plus the retry that succeeded.
+        expect(calls, 2);
+      });
+
+      test(
+          'mostRecentSittingDay does not throw and falls back to the last '
+          'day seen when getPreviousSittingDate persistently fails',
+          () async {
+        fakeService.debatesForDateBuilder = (_) => [placeholderDebate];
+        fakeService.speechesForDateBuilder = (_) => [];
+        // Every call fails, simulating a fully offline device — the walk
+        // can never confirm a better day, but resolution must still
+        // complete deterministically instead of throwing and abandoning
+        // the caller (e.g. the view's landing-day initialization).
+        fakeService.previousSittingDateBuilder = (_) =>
+            throw Exception('offline');
+
+        final result = await vm.mostRecentSittingDay(DateTime(2024, 11, 6));
+        expect(result, DateTime(2024, 11, 6));
+      });
+
+      test(
+          'previousVisibleSittingDay returns null instead of throwing when '
+          'getPreviousSittingDate persistently fails', () async {
+        fakeService.previousSittingDateBuilder = (_) =>
+            throw Exception('offline');
+
+        final result = await vm.previousVisibleSittingDay(DateTime(2024, 11, 6));
+        expect(result, isNull);
+      });
+
+      test(
+          'nextVisibleSittingDay returns null instead of throwing when '
+          'getNextSittingDate persistently fails', () async {
+        fakeService.nextSittingDateBuilder = (_) =>
+            throw Exception('offline');
+
+        final result = await vm.nextVisibleSittingDay(DateTime(2024, 11, 4));
+        expect(result, isNull);
+      });
+    });
+
     group('sittingDaysInMonth', () {
       Set<DateTime> weekdaysOfMonth(int year, int month) {
         final days = <DateTime>{};

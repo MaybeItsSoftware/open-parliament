@@ -167,23 +167,41 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// placeholder-only sitting days, which is rare.
   static const int _maxContentLookbackHops = 15;
 
+  /// Calls [previousSittingDay] or [nextSittingDay] for [day], retrying once
+  /// on failure before giving up. Those hit the network and can throw (no
+  /// connectivity, API error); left unguarded, a single throw would propagate
+  /// out of [_walkToVisibleDay] / [mostRecentSittingDay] and abandon
+  /// landing-day resolution entirely — the app would never move off "today"
+  /// even when today has no content. A failure that survives the retry is
+  /// treated the same as "no further sitting day in that direction", so
+  /// callers fall back to whatever candidate they already have instead of
+  /// hanging or crashing.
+  Future<DateTime?> _stepSittingDay(DateTime day, {required bool forward}) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return forward ? await nextSittingDay(day) : await previousSittingDay(day);
+      } catch (_) {
+        if (attempt == 1) return null;
+      }
+    }
+    return null;
+  }
+
   /// Walks the Hansard sitting-day chain from [start], skipping
   /// placeholder-only days, until a day with real debate content is found or
   /// [_maxContentLookbackHops] hops are exhausted. Returns `null` if there
-  /// are no more sitting days in that direction.
+  /// are no more sitting days in that direction (including when the chain
+  /// can't be walked further due to a persistent service failure).
   Future<DateTime?> _walkToVisibleDay(
     DateTime start, {
     required bool forward,
   }) async {
-    DateTime? candidate =
-        forward ? await nextSittingDay(start) : await previousSittingDay(start);
+    DateTime? candidate = await _stepSittingDay(start, forward: forward);
     for (var hop = 0;
         hop < _maxContentLookbackHops && candidate != null;
         hop++) {
       if (await hasVisibleDebates(candidate)) return candidate;
-      candidate = forward
-          ? await nextSittingDay(candidate)
-          : await previousSittingDay(candidate);
+      candidate = await _stepSittingDay(candidate, forward: forward);
     }
     return null;
   }
@@ -200,8 +218,9 @@ class DateSelectorViewModel extends ChangeNotifier {
 
   /// Returns the latest sitting day on or before [day] with real debate
   /// content, walking backward past any placeholder-only days. Falls back to
-  /// the last candidate seen if the lookback is exhausted, so the caller
-  /// always has something to show rather than nothing.
+  /// the last candidate seen if the lookback is exhausted (including when a
+  /// persistent service failure stops the walk short), so the caller always
+  /// has something to show rather than nothing.
   Future<DateTime?> mostRecentSittingDay(DateTime day) async {
     DateTime? candidate = DateTime(day.year, day.month, day.day);
     DateTime? lastSeen;
@@ -210,7 +229,7 @@ class DateSelectorViewModel extends ChangeNotifier {
         hop++) {
       lastSeen = candidate;
       if (await hasVisibleDebates(candidate)) return candidate;
-      candidate = await previousSittingDay(candidate);
+      candidate = await _stepSittingDay(candidate, forward: false);
     }
     return lastSeen;
   }
