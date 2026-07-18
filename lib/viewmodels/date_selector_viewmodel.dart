@@ -102,6 +102,21 @@ class DebateFeedItem {
   }
 }
 
+/// Result of [DateSelectorViewModel.loadDebateFeedWithStatus]: the debate
+/// feed for a day, plus — only meaningful when [items] is empty — whether
+/// the day was a scheduled sitting day whose transcripts simply haven't been
+/// published by Hansard yet, as opposed to Parliament genuinely not sitting
+/// (weekend/recess).
+class DebateFeedResult {
+  final List<DebateFeedItem> items;
+  final bool isPendingPublication;
+
+  const DebateFeedResult({
+    required this.items,
+    this.isPendingPublication = false,
+  });
+}
+
 /// View-model backing the date selector screen.
 ///
 /// Provides the set of sitting days that are available to browse and tracks
@@ -234,6 +249,26 @@ class DateSelectorViewModel extends ChangeNotifier {
     return lastSeen;
   }
 
+  /// Resolves which day the landing screen should open on for [today].
+  ///
+  ///  - If [today] already has real debate content, returns [today]
+  ///    unchanged (the common case).
+  ///  - Else, if [today] was a scheduled sitting day (per
+  ///    [isSittingDayScheduled]) but nothing has been published yet, still
+  ///    returns [today] — the caller is expected to show an explicit "not
+  ///    published yet" empty state (see [loadDebateFeedWithStatus]) rather
+  ///    than silently substituting another day.
+  ///  - Otherwise (today isn't a scheduled sitting day — weekend/recess —
+  ///    or the recess check itself failed and defensively resolved to "not
+  ///    scheduled") falls back to [mostRecentSittingDay], preserving the
+  ///    original silent walk-back-to-content behaviour exactly.
+  Future<DateTime> resolveLandingDay(DateTime today) async {
+    final normalizedToday = DateTime(today.year, today.month, today.day);
+    if (await hasVisibleDebates(normalizedToday)) return normalizedToday;
+    if (await isSittingDayScheduled(normalizedToday)) return normalizedToday;
+    return await mostRecentSittingDay(normalizedToday) ?? normalizedToday;
+  }
+
   /// In-memory cache of enumerated sitting days, keyed by `YYYY-MM`.
   final Map<String, Set<DateTime>> _sittingDaysByMonth = {};
 
@@ -310,6 +345,33 @@ class DateSelectorViewModel extends ChangeNotifier {
     return result;
   }
 
+  /// Returns true if [day] was scheduled for Parliament to sit — a weekday
+  /// not covered by any recess/non-sitting period ([recessDaysInMonth]) —
+  /// independent of whether Hansard has actually *published* transcripts
+  /// for that day yet.
+  ///
+  /// Used to tell "Parliament wasn't sitting" (weekend/recess) apart from
+  /// "Parliament sat but Hansard hasn't published yet" when
+  /// [hasVisibleDebates] is false for [day]. Hansard's own sitting calendar
+  /// ([sittingDaysInMonth]) is unsuitable for this check — it's populated
+  /// retroactively as Hansard processes each day, so it suffers the same
+  /// publish-lag problem this method exists to detect around. The recess
+  /// calendar, by contrast, is published well in advance.
+  ///
+  /// Fails closed: if the recess check itself fails, [recessDaysInMonth]
+  /// returns an empty map (its own documented best-effort behaviour), which
+  /// makes this return `true` for any weekday. A genuine recess day hit
+  /// during a recess-API outage would therefore be mistaken for "scheduled
+  /// but unpublished" rather than falling back to the walk-back behaviour —
+  /// an accepted, bounded tradeoff (the caller still offers a manual
+  /// "view previous sitting day" escape hatch), consistent with how recess
+  /// data is treated as best-effort everywhere else in this view-model.
+  Future<bool> isSittingDayScheduled(DateTime day) async {
+    if (!isSittingDay(day)) return false;
+    final recess = await recessDaysInMonth(DateTime(day.year, day.month));
+    return !recess.containsKey(DateTime(day.year, day.month, day.day));
+  }
+
   static String _monthKey(DateTime month) =>
       '${month.year.toString().padLeft(4, '0')}-'
       '${month.month.toString().padLeft(2, '0')}';
@@ -383,6 +445,24 @@ class DateSelectorViewModel extends ChangeNotifier {
     } catch (_) {
       return const <DebateFeedItem>[];
     }
+  }
+
+  /// Loads the debate feed for [day] and, only when it turns out empty *and*
+  /// [isToday] is true, additionally checks [isSittingDayScheduled] to
+  /// classify the empty state as "pending publication" vs. genuinely no
+  /// sitting. Bundled into a single awaited value so the view has one
+  /// loading → resolved transition rather than a second nested future for
+  /// the empty-state classification.
+  Future<DebateFeedResult> loadDebateFeedWithStatus(
+    DateTime day, {
+    required bool isToday,
+  }) async {
+    final items = await loadDebateFeed(day);
+    if (items.isNotEmpty || !isToday) {
+      return DebateFeedResult(items: items);
+    }
+    final scheduled = await isSittingDayScheduled(day);
+    return DebateFeedResult(items: items, isPendingPublication: scheduled);
   }
 
   static List<DebateFeedItem> _assembleDebateFeed(

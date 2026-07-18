@@ -145,9 +145,14 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<Set<DateTime>> getSittingDates(int year, int month) async =>
       <DateTime>{};
 
+  /// Scripts [getRecessPeriods]; when unset (empty), no day is treated as
+  /// in recess, so [DateSelectorViewModel.isSittingDayScheduled] is `true`
+  /// for every weekday.
+  List<RecessPeriod> recessPeriodsResult = const [];
+
   @override
   Future<List<RecessPeriod>> getRecessPeriods(int year, int month) async =>
-      const [];
+      recessPeriodsResult;
 
   @override
   Future<int> wipeDebateCache() async => 0;
@@ -255,6 +260,19 @@ void main() {
     // `todayKey` so it stays empty (no debates).
     fakeService.debatesByDate[priorKey] = [realDebate];
     fakeService.speechesByDate[priorKey] = [realSpeech];
+    // Mark today as in recess (regardless of what real weekday the suite
+    // happens to run on) so isSittingDayScheduled(today) is deterministically
+    // false and landing-day resolution falls through to the walk-back path
+    // this test exercises, rather than landing on today's pending-
+    // publication state.
+    fakeService.recessPeriodsResult = [
+      RecessPeriod(
+        description: 'Recess',
+        startDate: today.subtract(const Duration(days: 30)),
+        endDate: today.add(const Duration(days: 30)),
+        house: 'Commons',
+      ),
+    ];
 
     // Walking back from today hits one transient failure before recovering
     // — simulates a network blip during landing-day resolution, which used
@@ -303,11 +321,24 @@ void main() {
       'degrades gracefully (no crash, no permanent loading state) when the '
       'sitting-day walk persistently fails', (tester) async {
     final fakeService = _FakeParliamentaryDataService();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     // getDebatesForDate/getSpeeches default to empty for every date, so
     // today never has content; every attempt to walk backward also fails,
     // simulating a fully offline device.
     fakeService.previousSittingDateBuilder = (_) =>
         throw Exception('offline');
+    // Mark today as in recess so isSittingDayScheduled(today) is
+    // deterministically false and landing-day resolution actually attempts
+    // the (persistently failing) walk-back path this test exercises.
+    fakeService.recessPeriodsResult = [
+      RecessPeriod(
+        description: 'Recess',
+        startDate: today.subtract(const Duration(days: 30)),
+        endDate: today.add(const Duration(days: 30)),
+        house: 'Commons',
+      ),
+    ];
 
     await tester.pumpWidget(
       MultiProvider(
@@ -326,5 +357,72 @@ void main() {
     // exception, and no indefinitely-stuck loading spinner.
     expect(tester.takeException(), isNull);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets(
+      'lands on today with the "not yet published" empty state and a '
+      'working "view previous sitting day" action, when today is a '
+      'scheduled sitting day with nothing published yet', (tester) async {
+    final now = DateTime.now();
+    // isSittingDayScheduled requires a weekday; skip on a weekend CI run
+    // rather than asserting a scenario that can't occur for real "today".
+    if (now.weekday > DateTime.friday) return;
+
+    final fakeService = _FakeParliamentaryDataService();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayKey = DateSelectorViewModel.formatDate(today);
+    final priorDay = today.subtract(const Duration(days: 1));
+
+    const realDebate = Debate(
+      id: 'd-real',
+      title: 'Oral Answers to Questions',
+      house: 'Commons',
+      orderIndex: 0,
+    );
+    const realSpeech = Speech(
+      id: 's1',
+      debateId: 'd-real',
+      debateTitle: 'Oral Answers to Questions',
+      memberId: 1,
+      memberName: 'Alice',
+      attributedTo: 'Alice',
+      speechText: 'A real contribution.',
+      orderIndex: 0,
+    );
+    // Today has no content, and (unlike the other tests) is left out of
+    // recessPeriodsResult, so it's a scheduled-but-unpublished weekday.
+    fakeService.debatesByDate[DateSelectorViewModel.formatDate(priorDay)] =
+        [realDebate];
+    fakeService.speechesByDate[DateSelectorViewModel.formatDate(priorDay)] =
+        [realSpeech];
+    fakeService.previousSittingDateBuilder =
+        (date) => date == todayKey ? priorDay : null;
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ThemeService()),
+          Provider<ParliamentaryDataService>.value(value: fakeService),
+        ],
+        child: const MaterialApp(
+          home: DateSelectorView(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    // Landed on today, not silently substituted for the prior day.
+    expect(
+      find.textContaining('haven’t been published yet'),
+      findsOneWidget,
+    );
+    expect(find.text('Oral Answers to Questions'), findsNothing);
+
+    // The affordance jumps to the previous sitting day.
+    await tester.tap(find.text('View previous sitting day'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Oral Answers to Questions'), findsOneWidget);
   });
 }

@@ -749,6 +749,196 @@ void main() {
         expect(retried, isNotEmpty);
       });
     });
+
+    group('isSittingDayScheduled', () {
+      test('returns true for a weekday with no recess scripted', () async {
+        // Monday.
+        final result = await vm.isSittingDayScheduled(DateTime(2024, 11, 4));
+        expect(result, isTrue);
+      });
+
+      test('returns false for a weekend regardless of recess', () async {
+        // Saturday.
+        final result = await vm.isSittingDayScheduled(DateTime(2024, 11, 9));
+        expect(result, isFalse);
+      });
+
+      test('returns false for a weekday covered by a recess period',
+          () async {
+        fakeService.recessPeriodsResult = [
+          RecessPeriod(
+            description: 'Christmas recess',
+            startDate: DateTime(2024, 12, 20),
+            endDate: DateTime(2025, 1, 6),
+            house: 'Commons',
+          ),
+        ];
+        // A Monday inside the recess window.
+        final result = await vm.isSittingDayScheduled(DateTime(2024, 12, 23));
+        expect(result, isFalse);
+      });
+    });
+
+    group('resolveLandingDay', () {
+      const realDebate = Debate(
+        id: 'd-real',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realSpeech = Speech(
+        id: 's1',
+        debateId: 'd-real',
+        debateTitle: 'Oral Answers to Questions',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice',
+        speechText: 'A real contribution.',
+        orderIndex: 0,
+      );
+      final today = DateTime(2024, 11, 4); // Monday.
+
+      test('returns today unchanged when today has visible debates',
+          () async {
+        fakeService.debatesForDateBuilder = (_) => [realDebate];
+        fakeService.speechesForDateBuilder = (_) => [realSpeech];
+
+        final result = await vm.resolveLandingDay(today);
+
+        expect(result, today);
+        // Fast path: never needs the recess calendar.
+        expect(fakeService.getRecessPeriodsCalls, 0);
+      });
+
+      test(
+          'returns today unchanged (pending publication) when today is a '
+          'scheduled sitting day with no content yet', () async {
+        // getDebatesForDate/getSpeeches default to empty for every date.
+        var walkCalls = 0;
+        fakeService.previousSittingDateBuilder = (_) {
+          walkCalls++;
+          return null;
+        };
+
+        final result = await vm.resolveLandingDay(today);
+
+        expect(result, today);
+        // Must not have fallen through to the walk-back path.
+        expect(walkCalls, 0);
+      });
+
+      test(
+          'falls back to the most-recent-day walk when today is covered by '
+          'a recess period', () async {
+        fakeService.recessPeriodsResult = [
+          RecessPeriod(
+            description: 'Recess',
+            startDate: DateTime(2024, 11, 1),
+            endDate: DateTime(2024, 11, 8),
+            house: 'Commons',
+          ),
+        ];
+        fakeService.previousSittingDateBuilder = (date) =>
+            date == '2024-11-04' ? DateTime(2024, 7, 22) : null;
+
+        final result = await vm.resolveLandingDay(today);
+
+        expect(result, DateTime(2024, 7, 22));
+      });
+
+      test('falls back to the walk when the recess check fails', () async {
+        fakeService.recessPeriodsError = Exception('offline');
+        fakeService.previousSittingDateBuilder = (date) =>
+            date == '2024-11-04' ? DateTime(2024, 7, 22) : null;
+
+        final result = await vm.resolveLandingDay(today);
+
+        // recessDaysInMonth fails open (empty map), so isSittingDayScheduled
+        // returns true and today is returned unchanged rather than walking
+        // back — the documented, accepted fail-open tradeoff.
+        expect(result, today);
+      });
+
+      test('falls back to today when the walk is exhausted on a weekend',
+          () async {
+        final weekend = DateTime(2024, 11, 9); // Saturday.
+        fakeService.previousSittingDateBuilder = (_) => null;
+
+        final result = await vm.resolveLandingDay(weekend);
+
+        expect(result, weekend);
+      });
+    });
+
+    group('loadDebateFeedWithStatus', () {
+      const realDebate = Debate(
+        id: 'd-real',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        orderIndex: 0,
+      );
+      const realSpeech = Speech(
+        id: 's1',
+        debateId: 'd-real',
+        debateTitle: 'Oral Answers to Questions',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice',
+        speechText: 'A real contribution.',
+        orderIndex: 0,
+      );
+      final today = DateTime(2024, 11, 4); // Monday.
+
+      test('non-empty feed skips the recess check', () async {
+        fakeService.debatesForDateBuilder = (_) => [realDebate];
+        fakeService.speechesForDateBuilder = (_) => [realSpeech];
+
+        final result =
+            await vm.loadDebateFeedWithStatus(today, isToday: true);
+
+        expect(result.items, isNotEmpty);
+        expect(result.isPendingPublication, isFalse);
+        expect(fakeService.getRecessPeriodsCalls, 0);
+      });
+
+      test('empty feed for a non-today day skips the recess check',
+          () async {
+        final result =
+            await vm.loadDebateFeedWithStatus(today, isToday: false);
+
+        expect(result.items, isEmpty);
+        expect(result.isPendingPublication, isFalse);
+        expect(fakeService.getRecessPeriodsCalls, 0);
+      });
+
+      test(
+          'empty feed for today with no recess scripted reports pending '
+          'publication', () async {
+        final result =
+            await vm.loadDebateFeedWithStatus(today, isToday: true);
+
+        expect(result.items, isEmpty);
+        expect(result.isPendingPublication, isTrue);
+      });
+
+      test('empty feed for today covered by recess is not pending '
+          'publication', () async {
+        fakeService.recessPeriodsResult = [
+          RecessPeriod(
+            description: 'Recess',
+            startDate: DateTime(2024, 11, 1),
+            endDate: DateTime(2024, 11, 8),
+            house: 'Commons',
+          ),
+        ];
+
+        final result =
+            await vm.loadDebateFeedWithStatus(today, isToday: true);
+
+        expect(result.items, isEmpty);
+        expect(result.isPendingPublication, isFalse);
+      });
+    });
   });
 
   // ─── TranscriptViewModel tests ───────────────────────────────────────────

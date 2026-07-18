@@ -56,10 +56,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     try {
-      final latestDay = await _vm.mostRecentSittingDay(today);
-      if (latestDay == null) return;
-      _vm.setFocusedDay(latestDay);
-      _vm.selectDay(latestDay);
+      final landingDay = await _vm.resolveLandingDay(today);
+      _vm.setFocusedDay(landingDay);
+      _vm.selectDay(landingDay);
     } finally {
       if (mounted) setState(() => _resolvingLandingDay = false);
     }
@@ -221,16 +220,22 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       // about to navigate away from.
       return const Center(child: CircularProgressIndicator());
     }
-    return FutureBuilder<List<DebateFeedItem>>(
-      future: vm.loadDebateFeed(day),
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final isToday = day.isAtSameMomentAs(today);
+    return FutureBuilder<DebateFeedResult>(
+      future: vm.loadDebateFeedWithStatus(day, isToday: isToday),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final items = snapshot.data ?? const <DebateFeedItem>[];
+        final result = snapshot.data;
+        final items = result?.items ?? const <DebateFeedItem>[];
         if (items.isEmpty) {
-          return _buildNoDebatesCard(day);
+          return (result?.isPendingPublication ?? false)
+              ? _buildPendingPublicationCard(vm, day)
+              : _buildNoDebatesCard(day);
         }
 
         return ListView.separated(
@@ -325,6 +330,32 @@ class _DateSelectorViewState extends State<DateSelectorView> {
             'No debates are available for ${_friendlyDate(day)}.\n'
             'Parliament may be in recess.',
             textAlign: TextAlign.center,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPendingPublicationCard(DateSelectorViewModel vm, DateTime day) {
+    return Center(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Today’s debates haven’t been published yet.\n'
+                'Check back later, or view the previous sitting day.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () => unawaited(_shiftBySittingDay(vm, day, -1)),
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('View previous sitting day'),
+              ),
+            ],
           ),
         ),
       ),
