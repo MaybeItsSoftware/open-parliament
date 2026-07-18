@@ -56,3 +56,5 @@ secrets/
 
 # Node tooling (commitlint / semantic-release)
 node_modules/
+
+.env
