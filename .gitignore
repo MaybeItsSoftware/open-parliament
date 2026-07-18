@@ -50,7 +50,7 @@ app.*.map.json
 samples/hansard/
 
 sentry.properties
-.env
+assets/env/.env
 
 secrets/
 

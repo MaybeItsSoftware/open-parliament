@@ -1,6 +1,6 @@
 name: open_hansard
 description: Mobile app for reading UK Parliamentary debates verbatim from Hansard.
-version: 0.5.2+502
+version: 0.6.0+600
 publish_to: none
 
 environment:
@@ -75,7 +75,7 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - .env
+    - assets/env/
     - assets/branding/icon.png
 
 sentry:

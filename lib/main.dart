@@ -19,7 +19,9 @@ import 'views/date_selector_view.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load();
+  // isOptional: local dev runs fine without a .env — SENTRY_DSN just reads
+  // as empty and Sentry stays disabled below.
+  await dotenv.load(fileName: 'assets/env/.env', isOptional: true);
   final sentryDsn = dotenv.env['SENTRY_DSN'] ?? '';
 
   final rootDirectory = await getApplicationSupportDirectory();
