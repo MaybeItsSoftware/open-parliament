@@ -1,3 +1,19 @@
+# [0.6.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.2...v0.6.0) (2026-07-18)
+
+
+### Bug Fixes
+
+* **home:** keep debate titles readable on narrow screens ([ea3b747](https://github.com/MaybeItsSoftware/open-parliament/commit/ea3b7473a4f1937f6c8b6ae2b449442afc2550da))
+* **home:** never land on a day with no content ([68d1ccd](https://github.com/MaybeItsSoftware/open-parliament/commit/68d1ccd194e021aa1611c8dcd123e990a502e828))
+* **home:** tapping the date label opens the date picker, not a debate ([0875c61](https://github.com/MaybeItsSoftware/open-parliament/commit/0875c613e0cdc7a0d0161288a85adaa6547d0bc7))
+* **ios:** use manual code signing with match provisioning profiles ([8ca8b0f](https://github.com/MaybeItsSoftware/open-parliament/commit/8ca8b0f4775f7b377f5d879354670160713fac1c))
+
+
+### Features
+
+* **calendar:** highlight and name a recess when one of its days is tapped ([0df633f](https://github.com/MaybeItsSoftware/open-parliament/commit/0df633f704976afac39daecfd20f9cd39ac9b5e3))
+* **calendar:** mark parliamentary recesses in the sitting-day calendar ([111064e](https://github.com/MaybeItsSoftware/open-parliament/commit/111064ec42ad066598cda3bbae8fae9a85b0dd09))
+
 ## [0.5.2](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.1...v0.5.2) (2026-07-09)
 
 
