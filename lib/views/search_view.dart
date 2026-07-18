@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/council.dart';
 import '../models/councillor.dart';
 import '../models/councillor_profile.dart';
 import '../models/member.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/area_match.dart';
+import '../utils/council_control.dart';
 import '../utils/party_colors.dart' as party_util;
+import '../viewmodels/constituency_map_viewmodel.dart';
 import '../viewmodels/search_viewmodel.dart';
 import '../widgets/person_avatar.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
+import 'constituency_map_view.dart';
 import 'council_view.dart';
 import 'member_view.dart';
 import 'transcript_view.dart';
@@ -138,6 +142,17 @@ class _SearchViewState extends State<SearchView> {
       tiles: [
         for (final constituency in results.constituencies)
           _constituencyTile(context, constituency: constituency),
+      ],
+    );
+
+    _addSection(
+      context,
+      children,
+      title: 'Councils',
+      count: results.councils.length,
+      tiles: [
+        for (final council in results.councils)
+          _councilTile(context, council: council),
       ],
     );
 
@@ -316,9 +331,36 @@ class _SearchViewState extends State<SearchView> {
       leading: _memberAvatar(constituency.member),
       title: Text(constituency.name),
       subtitle: Text(subtitleParts.join(' · ')),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: const Icon(Icons.map_outlined),
       onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => MemberView(member: constituency.member)),
+        MaterialPageRoute(
+          builder: (_) => ConstituencyMapView(
+            focusAreaName: constituency.name,
+            initialMode: MapMode.constituency,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _councilTile(BuildContext context, {required Council council}) {
+    final subtitleParts = <String>[
+      if (council.type.isNotEmpty) council.type,
+      controlDisplayName(council.control),
+    ];
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.account_balance_outlined),
+      title: Text(council.name),
+      subtitle: Text(subtitleParts.join(' · ')),
+      trailing: const Icon(Icons.map_outlined),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ConstituencyMapView(
+            focusAreaName: council.name,
+            initialMode: MapMode.council,
+          ),
+        ),
       ),
     );
   }

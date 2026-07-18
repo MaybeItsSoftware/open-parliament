@@ -21,7 +21,19 @@ import 'member_view.dart';
 /// National map showing political control: constituencies coloured by the
 /// sitting MP's party, councils by their controlling party.
 class ConstituencyMapView extends StatefulWidget {
-  const ConstituencyMapView({super.key});
+  /// When set, the map loads in [initialMode] and flies straight to the area
+  /// with this name once it's loaded (used when arriving from search).
+  final String? focusAreaName;
+
+  /// The mode to load on entry; only meaningful alongside [focusAreaName]
+  /// since the mode toggle otherwise always starts on constituencies.
+  final MapMode initialMode;
+
+  const ConstituencyMapView({
+    super.key,
+    this.focusAreaName,
+    this.initialMode = MapMode.constituency,
+  });
 
   @override
   State<ConstituencyMapView> createState() => _ConstituencyMapViewState();
@@ -58,6 +70,15 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
   /// while it slides back down after being dismissed.
   MapArea? _lastArea;
 
+  /// True until the initial [ConstituencyMapView.focusAreaName] fly-to has
+  /// been attempted, so it only ever runs once.
+  bool _pendingFocus = false;
+
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  String _searchQuery = '';
+  bool _showSearch = false;
+
   /// The base polygon layer, cached as a widget *instance* and rebuilt only
   /// when the view-model hands us a different area list (mode switch/reload).
   /// Passing the identical instance across rebuilds makes Flutter skip the
@@ -73,7 +94,8 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     _vm = ConstituencyMapViewModel(
       context.read<ParliamentaryDataService>(),
     );
-    unawaited(_vm.load(MapMode.constituency));
+    _pendingFocus = widget.focusAreaName != null;
+    unawaited(_vm.load(widget.initialMode));
 
     _flight.addListener(() {
       final t = Curves.easeInOutCubic.transform(_flight.value);
@@ -108,7 +130,62 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
   void dispose() {
     _flight.dispose();
     _vm.dispose();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Selects and flies to the area named [name] (from search or a deep link),
+  /// matched with the same name-normalisation used to join boundaries to data.
+  /// A no-op if the area can't be found (e.g. still loading, or unmatched).
+  void _focusOnArea(String name) {
+    final normalize =
+        _vm.mode == MapMode.council ? normaliseCouncilName : normaliseName;
+    final target = normalize(name);
+    MapArea? match;
+    for (final area in _vm.areas) {
+      if (normalize(area.name) == target) {
+        match = area;
+        break;
+      }
+    }
+    if (match == null) return;
+    setState(() {
+      _selected = match;
+      _lastArea = match;
+    });
+    _zoomToArea(match);
+  }
+
+  /// Areas whose name (or, for constituencies, sitting MP) matches [query].
+  List<MapArea> _searchMatches(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    final matches = [
+      for (final area in _vm.areas)
+        if (area.name.toLowerCase().contains(q) ||
+            (area.member?.name.toLowerCase().contains(q) ?? false))
+          area,
+    ];
+    matches.sort((a, b) {
+      final byIndex = a.name.toLowerCase().indexOf(q).compareTo(
+            b.name.toLowerCase().indexOf(q),
+          );
+      if (byIndex != 0) return byIndex;
+      return a.name.compareTo(b.name);
+    });
+    return matches.take(8).toList();
+  }
+
+  void _selectSearchResult(MapArea area) {
+    setState(() {
+      _selected = area;
+      _lastArea = area;
+      _searchQuery = '';
+    });
+    _searchController.clear();
+    _searchFocusNode.unfocus();
+    _zoomToArea(area);
   }
 
   void _openCouncil(MapArea area) {
@@ -202,6 +279,13 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
           final selectionPolygons = _selected == null
               ? const <Polygon>[]
               : _selectionPolygons(vm.areas, _selected!.name);
+          if (_pendingFocus && !vm.isLoading && vm.areas.isNotEmpty) {
+            _pendingFocus = false;
+            final name = widget.focusAreaName!;
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _focusOnArea(name));
+          }
+          final searchMatches = _searchMatches(_searchQuery);
           return Scaffold(
             appBar: AppBar(
               title: const Text('Control Map'),
@@ -209,26 +293,59 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                 preferredSize: const Size.fromHeight(56),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: SegmentedButton<MapMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: MapMode.constituency,
-                        label: Text('Constituencies'),
-                        icon: Icon(Icons.how_to_vote_outlined),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: SegmentedButton<MapMode>(
+                          segments: const [
+                            ButtonSegment(
+                              value: MapMode.constituency,
+                              label: Text('Constituencies'),
+                              icon: Icon(Icons.how_to_vote_outlined),
+                            ),
+                            ButtonSegment(
+                              value: MapMode.council,
+                              label: Text('Councils'),
+                              icon: Icon(Icons.account_balance_outlined),
+                            ),
+                          ],
+                          selected: {vm.mode},
+                          showSelectedIcon: false,
+                          onSelectionChanged: (selection) {
+                            if (selection.isEmpty) return;
+                            setState(() {
+                              _selected = null;
+                              _searchQuery = '';
+                            });
+                            _searchController.clear();
+                            _searchFocusNode.unfocus();
+                            unawaited(_vm.load(selection.first));
+                          },
+                        ),
                       ),
-                      ButtonSegment(
-                        value: MapMode.council,
-                        label: Text('Councils'),
-                        icon: Icon(Icons.account_balance_outlined),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        isSelected: _showSearch,
+                        icon: const Icon(Icons.search),
+                        selectedIcon: const Icon(Icons.search_off),
+                        tooltip: 'Search',
+                        onPressed: () {
+                          setState(() {
+                            _showSearch = !_showSearch;
+                            if (!_showSearch) {
+                              _searchQuery = '';
+                              _searchController.clear();
+                              _searchFocusNode.unfocus();
+                            } else {
+                              // Focus the search bar when it appears
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                _searchFocusNode.requestFocus();
+                              });
+                            }
+                          });
+                        },
                       ),
                     ],
-                    selected: {vm.mode},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (selection) {
-                      if (selection.isEmpty) return;
-                      setState(() => _selected = null);
-                      unawaited(_vm.load(selection.first));
-                    },
                   ),
                 ),
               ),
@@ -296,6 +413,27 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                     left: 12,
                     bottom: 12,
                     child: _Legend(mode: vm.mode),
+                  ),
+                if (_showSearch)
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    right: 68,
+                    child: _MapSearchBar(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      hintText: vm.mode == MapMode.constituency
+                          ? 'Search constituencies'
+                          : 'Search councils',
+                      matches: searchMatches,
+                      onChanged: (value) =>
+                          setState(() => _searchQuery = value),
+                      onClear: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                      onSelect: _selectSearchResult,
+                    ),
                   ),
                 // A single, stable drawer subtree that slides in/out. Keeping
                 // one subtree (rather than swapping with AnimatedSwitcher)
@@ -372,6 +510,104 @@ List<Polygon> _selectionPolygons(List<MapArea> areas, String name) {
           disableHolesBorder: true,
         ),
   ];
+}
+
+/// Floating search field for jumping straight to a named constituency/council;
+/// shows a suggestion list beneath it while focused with a non-empty query.
+class _MapSearchBar extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final String hintText;
+  final List<MapArea> matches;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+  final ValueChanged<MapArea> onSelect;
+
+  const _MapSearchBar({
+    required this.controller,
+    required this.focusNode,
+    required this.hintText,
+    required this.matches,
+    required this.onChanged,
+    required this.onClear,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Material(
+          elevation: 3,
+          borderRadius: BorderRadius.circular(12),
+          color: theme.colorScheme.surface,
+          child: TextField(
+            controller: controller,
+            focusNode: focusNode,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: hintText,
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: controller.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear',
+                      icon: const Icon(Icons.close),
+                      onPressed: onClear,
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              filled: true,
+              fillColor: theme.colorScheme.surface,
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+            ),
+            onChanged: onChanged,
+          ),
+        ),
+        if (focusNode.hasFocus && controller.text.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Material(
+              elevation: 3,
+              borderRadius: BorderRadius.circular(12),
+              color: theme.colorScheme.surface,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 260),
+                child: matches.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          'No matches',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      )
+                    : ListView(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        children: [
+                          for (final area in matches)
+                            ListTile(
+                              dense: true,
+                              title: Text(area.name),
+                              subtitle: Text(area.controller),
+                              onTap: () => onSelect(area),
+                            ),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 /// A small compass whose needle tracks the map's bearing; tap to reset north
