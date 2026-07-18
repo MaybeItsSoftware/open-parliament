@@ -74,9 +74,6 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Write .env
-        run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
-
       - name: Analyze code
         run: flutter analyze --fatal-infos
 
@@ -124,7 +121,9 @@ jobs:
         run: flutter pub get
 
       - name: Write .env for release build
-        run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
+        run: |
+          mkdir -p assets/env
+          echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > assets/env/.env
 
       - name: Build & upload to TestFlight
         run: bundle exec fastlane ios beta
@@ -181,7 +180,9 @@ jobs:
         run: flutter pub get
 
       - name: Write .env for release build
-        run: echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > .env
+        run: |
+          mkdir -p assets/env
+          echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > assets/env/.env
 
       - name: Decode signing keystore
         run: echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks

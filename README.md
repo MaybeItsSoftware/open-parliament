@@ -4,10 +4,12 @@ Mobile app for easily reading UK Parliamentary Debates taken verbatim from Hansa
 ## Getting started
 
 ```bash
-cp .env.example .env   # required: app reads .env as a bundled asset on startup
 flutter pub get
 flutter run
 ```
+
+Optionally, `cp .env.example assets/env/.env` first to set `SENTRY_DSN` — the
+app runs fine without it, just with Sentry reporting disabled.
 
 See [AGENTS.md](./AGENTS.md) for architecture, conventions, and testing guidance.
 
