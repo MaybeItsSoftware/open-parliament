@@ -15,6 +15,7 @@ class SearchResults {
   final List<BillSearchResult> bills;
   final List<DebateSearchResult> debates;
   final List<ConstituencySearchResult> constituencies;
+  final List<Council> councils;
 
   const SearchResults({
     this.members = const [],
@@ -22,6 +23,7 @@ class SearchResults {
     this.bills = const [],
     this.debates = const [],
     this.constituencies = const [],
+    this.councils = const [],
   });
 
   bool get isEmpty =>
@@ -29,7 +31,8 @@ class SearchResults {
       councillors.isEmpty &&
       bills.isEmpty &&
       debates.isEmpty &&
-      constituencies.isEmpty;
+      constituencies.isEmpty &&
+      councils.isEmpty;
 }
 
 class BillSearchResult {
@@ -106,6 +109,7 @@ class SearchViewModel extends ChangeNotifier {
   static const int _debateLimit = 20;
   static const int _councillorLimit = 20;
   static const int _constituencyLimit = 12;
+  static const int _councilLimit = 12;
 
   static final RegExp _nonWord = RegExp(r'[^a-z0-9]+');
   static final RegExp _multiSpace = RegExp(r'\s+');
@@ -230,6 +234,7 @@ class SearchViewModel extends ChangeNotifier {
 
     List<Member> members = const [];
     List<ConstituencySearchResult> constituencies = const [];
+    List<Council> councils = const [];
     List<CouncillorSearchResult> councillors = const [];
     List<BillSearchResult> bills = const [];
     List<DebateSearchResult> debates = const [];
@@ -244,6 +249,12 @@ class SearchViewModel extends ChangeNotifier {
       constituencies = await _searchConstituencies(normalized);
     } catch (e) {
       errors.add('Constituencies: ${e.toString()}');
+    }
+
+    try {
+      councils = await _searchCouncils(normalized);
+    } catch (e) {
+      errors.add('Councils: ${e.toString()}');
     }
 
     try {
@@ -271,6 +282,7 @@ class SearchViewModel extends ChangeNotifier {
       bills: bills,
       debates: debates,
       constituencies: constituencies,
+      councils: councils,
     );
     _error = errors.isEmpty ? null : errors.join('\n');
     _isLoading = false;
@@ -317,6 +329,22 @@ class SearchViewModel extends ChangeNotifier {
     matches.sort(_compareScored);
     return [
       for (final m in matches.take(_constituencyLimit)) m.value,
+    ];
+  }
+
+  Future<List<Council>> _searchCouncils(String query) async {
+    final lookup = await _loadCouncilLookup();
+    final matches = <_Scored<Council>>[];
+    for (final council in lookup.values) {
+      final score = _score(_normalize(council.name), query);
+      if (score == null) continue;
+      matches.add(
+        _Scored(value: council, score: score, sortKey: council.name),
+      );
+    }
+    matches.sort(_compareScored);
+    return [
+      for (final m in matches.take(_councilLimit)) m.value,
     ];
   }
 
