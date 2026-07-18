@@ -305,4 +305,79 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'debate card dynamically limits top speakers to prevent clipping',
+    (tester) async {
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+
+      final fakeService = _FakeServiceWithSpeakers();
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: ThemeService()),
+            Provider<ParliamentaryDataService>.value(value: fakeService),
+          ],
+          child: const MaterialApp(
+            home: DateSelectorView(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify that Yvette Cooper and Priti Patel are visible
+      expect(find.text('Yvette Cooper'), findsOneWidget);
+      expect(find.text('Priti Patel'), findsOneWidget);
+      // Charlie Maynard should be omitted because the remaining space only fits 2 speakers
+      expect(find.text('Charlie Maynard'), findsNothing);
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+}
+
+class _FakeServiceWithSpeakers extends _FakeParliamentaryDataService {
+  @override
+  Future<List<Speech>> getSpeeches(String date) async => [
+        Speech(
+          id: 'speech-1',
+          debateId: 'debate-1',
+          debateTitle: _longTitle,
+          memberId: 1,
+          memberName: 'Yvette Cooper',
+          speechText: 'Word ' * 7000,
+          attributedTo: 'Yvette Cooper',
+          orderIndex: 0,
+        ),
+        Speech(
+          id: 'speech-2',
+          debateId: 'debate-1',
+          debateTitle: _longTitle,
+          memberId: 2,
+          memberName: 'Priti Patel',
+          speechText: 'Word ' * 600,
+          attributedTo: 'Priti Patel',
+          orderIndex: 1,
+        ),
+        Speech(
+          id: 'speech-3',
+          debateId: 'debate-1',
+          debateTitle: _longTitle,
+          memberId: 3,
+          memberName: 'Charlie Maynard',
+          speechText: 'Word ' * 200,
+          attributedTo: 'Charlie Maynard',
+          orderIndex: 2,
+        ),
+      ];
+
+  @override
+  Future<List<Member>> getMembers() async => const [
+        Member(id: 1, name: 'Yvette Cooper', party: 'Labour', partyAbbreviation: 'Lab'),
+        Member(id: 2, name: 'Priti Patel', party: 'Conservative', partyAbbreviation: 'Con'),
+        Member(id: 3, name: 'Charlie Maynard', party: 'Lib Dem', partyAbbreviation: 'LD'),
+      ];
 }

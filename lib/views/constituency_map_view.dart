@@ -97,6 +97,8 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     _pendingFocus = widget.focusAreaName != null;
     unawaited(_vm.load(widget.initialMode));
 
+    _searchFocusNode.addListener(_onSearchFocusChanged);
+
     _flight.addListener(() {
       final t = Curves.easeInOutCubic.transform(_flight.value);
       _mapController.move(
@@ -126,8 +128,13 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
     _mapController.rotate(0);
   }
 
+  void _onSearchFocusChanged() {
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    _searchFocusNode.removeListener(_onSearchFocusChanged);
     _flight.dispose();
     _vm.dispose();
     _searchController.dispose();
@@ -290,61 +297,124 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
             appBar: AppBar(
               title: const Text('Control Map'),
               bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(56),
+                preferredSize: Size.fromHeight(_showSearch ? 112 : 56),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Row(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: SegmentedButton<MapMode>(
-                          segments: const [
-                            ButtonSegment(
-                              value: MapMode.constituency,
-                              label: Text('Constituencies'),
-                              icon: Icon(Icons.how_to_vote_outlined),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SegmentedButton<MapMode>(
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              segments: const [
+                                ButtonSegment(
+                                  value: MapMode.constituency,
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      'Constituencies',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                    ),
+                                  ),
+                                  icon: Icon(Icons.how_to_vote_outlined),
+                                ),
+                                ButtonSegment(
+                                  value: MapMode.council,
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      'Councils',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                    ),
+                                  ),
+                                  icon: Icon(Icons.account_balance_outlined),
+                                ),
+                              ],
+                              selected: {vm.mode},
+                              showSelectedIcon: false,
+                              onSelectionChanged: (selection) {
+                                if (selection.isEmpty) return;
+                                setState(() {
+                                  _selected = null;
+                                  _searchQuery = '';
+                                });
+                                _searchController.clear();
+                                _searchFocusNode.unfocus();
+                                unawaited(_vm.load(selection.first));
+                              },
                             ),
-                            ButtonSegment(
-                              value: MapMode.council,
-                              label: Text('Councils'),
-                              icon: Icon(Icons.account_balance_outlined),
-                            ),
-                          ],
-                          selected: {vm.mode},
-                          showSelectedIcon: false,
-                          onSelectionChanged: (selection) {
-                            if (selection.isEmpty) return;
-                            setState(() {
-                              _selected = null;
-                              _searchQuery = '';
-                            });
-                            _searchController.clear();
-                            _searchFocusNode.unfocus();
-                            unawaited(_vm.load(selection.first));
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        isSelected: _showSearch,
-                        icon: const Icon(Icons.search),
-                        selectedIcon: const Icon(Icons.search_off),
-                        tooltip: 'Search',
-                        onPressed: () {
-                          setState(() {
-                            _showSearch = !_showSearch;
-                            if (!_showSearch) {
-                              _searchQuery = '';
-                              _searchController.clear();
-                              _searchFocusNode.unfocus();
-                            } else {
-                              // Focus the search bar when it appears
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                _searchFocusNode.requestFocus();
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: Icon(_showSearch ? Icons.close : Icons.search),
+                            tooltip: _showSearch ? 'Close search' : 'Search',
+                            onPressed: () {
+                              setState(() {
+                                if (_showSearch) {
+                                  _showSearch = false;
+                                  _searchQuery = '';
+                                  _searchController.clear();
+                                  _searchFocusNode.unfocus();
+                                } else {
+                                  _showSearch = true;
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    _searchFocusNode.requestFocus();
+                                  });
+                                }
                               });
-                            }
-                          });
-                        },
+                            },
+                          ),
+                        ],
                       ),
+                      if (_showSearch) ...[
+                        const SizedBox(height: 8),
+                        Material(
+                          elevation: 3,
+                          borderRadius: BorderRadius.circular(12),
+                          color: theme.colorScheme.surface,
+                          child: TextField(
+                            controller: _searchController,
+                            focusNode: _searchFocusNode,
+                            textInputAction: TextInputAction.search,
+                            decoration: InputDecoration(
+                              hintText: vm.mode == MapMode.constituency
+                                  ? 'Search constituencies'
+                                  : 'Search councils',
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _searchController.text.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      tooltip: 'Clear',
+                                      icon: const Icon(Icons.close),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() => _searchQuery = '');
+                                      },
+                                    ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              filled: true,
+                              fillColor: theme.colorScheme.surface,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 12,
+                              ),
+                            ),
+                            onChanged: (value) =>
+                                setState(() => _searchQuery = value),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -414,25 +484,43 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                     bottom: 12,
                     child: _Legend(mode: vm.mode),
                   ),
-                if (_showSearch)
+                if (_showSearch &&
+                    _searchFocusNode.hasFocus &&
+                    _searchQuery.trim().isNotEmpty)
                   Positioned(
-                    top: 12,
-                    left: 12,
-                    right: 68,
-                    child: _MapSearchBar(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      hintText: vm.mode == MapMode.constituency
-                          ? 'Search constituencies'
-                          : 'Search councils',
-                      matches: searchMatches,
-                      onChanged: (value) =>
-                          setState(() => _searchQuery = value),
-                      onClear: () {
-                        _searchController.clear();
-                        setState(() => _searchQuery = '');
-                      },
-                      onSelect: _selectSearchResult,
+                    top: 8,
+                    left: 16,
+                    right: 16,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(12),
+                      color: theme.colorScheme.surface,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 260),
+                        child: searchMatches.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Text(
+                                  'No matches',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              )
+                            : ListView(
+                                shrinkWrap: true,
+                                padding: EdgeInsets.zero,
+                                children: [
+                                  for (final area in searchMatches)
+                                    ListTile(
+                                      dense: true,
+                                      title: Text(area.name),
+                                      subtitle: Text(area.controller),
+                                      onTap: () => _selectSearchResult(area),
+                                    ),
+                                ],
+                              ),
+                      ),
                     ),
                   ),
                 // A single, stable drawer subtree that slides in/out. Keeping
@@ -512,103 +600,7 @@ List<Polygon> _selectionPolygons(List<MapArea> areas, String name) {
   ];
 }
 
-/// Floating search field for jumping straight to a named constituency/council;
-/// shows a suggestion list beneath it while focused with a non-empty query.
-class _MapSearchBar extends StatelessWidget {
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final String hintText;
-  final List<MapArea> matches;
-  final ValueChanged<String> onChanged;
-  final VoidCallback onClear;
-  final ValueChanged<MapArea> onSelect;
 
-  const _MapSearchBar({
-    required this.controller,
-    required this.focusNode,
-    required this.hintText,
-    required this.matches,
-    required this.onChanged,
-    required this.onClear,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Material(
-          elevation: 3,
-          borderRadius: BorderRadius.circular(12),
-          color: theme.colorScheme.surface,
-          child: TextField(
-            controller: controller,
-            focusNode: focusNode,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: hintText,
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: controller.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear',
-                      icon: const Icon(Icons.close),
-                      onPressed: onClear,
-                    ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              filled: true,
-              fillColor: theme.colorScheme.surface,
-              isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-            ),
-            onChanged: onChanged,
-          ),
-        ),
-        if (focusNode.hasFocus && controller.text.trim().isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Material(
-              elevation: 3,
-              borderRadius: BorderRadius.circular(12),
-              color: theme.colorScheme.surface,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 260),
-                child: matches.isEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          'No matches',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      )
-                    : ListView(
-                        shrinkWrap: true,
-                        padding: EdgeInsets.zero,
-                        children: [
-                          for (final area in matches)
-                            ListTile(
-                              dense: true,
-                              title: Text(area.name),
-                              subtitle: Text(area.controller),
-                              onTap: () => onSelect(area),
-                            ),
-                        ],
-                      ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
 
 /// A small compass whose needle tracks the map's bearing; tap to reset north
 /// and recentre on the UK.

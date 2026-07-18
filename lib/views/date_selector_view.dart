@@ -174,7 +174,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final canMoveForward = !selectedDay.isAtSameMomentAs(today);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(10),
@@ -183,26 +183,41 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             onPressed: () => unawaited(_shiftBySittingDay(vm, selectedDay, -1)),
           ),
           Expanded(
             child: GestureDetector(
               onTap: () => _pickDate(vm, selectedDay),
-              child: Text(
-                _friendlyDate(selectedDay),
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+              behavior: HitTestBehavior.opaque,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.calendar_today_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      _friendlyDate(selectedDay),
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                     ),
+                  ),
+                ],
               ),
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.calendar_today_outlined),
-            onPressed: () => _pickDate(vm, selectedDay),
-          ),
-          IconButton(
             icon: const Icon(Icons.chevron_right),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             onPressed: canMoveForward
                 ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
                 : null,
@@ -471,42 +486,15 @@ class _DebateCardContent extends StatelessWidget {
           ],
         ];
 
-        final Widget extra;
-        if (showSpeakers && showPie) {
-          // Ample room at this tier (>= _pieTier) for the pie to flex into.
-          extra = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ...extraChildren,
-              const SizedBox(height: 8),
-              _TopSpeakersList(speakers: item.topSpeakers),
-              const SizedBox(height: 8),
-              Expanded(
-                child: _PartyContributionPie(breakdown: item.partyBreakdown),
-              ),
-            ],
-          );
-        } else {
-          extra = SingleChildScrollView(
-            physics: const NeverScrollableScrollPhysics(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ...extraChildren,
-                // Engagement content: a thin party bar on short cards,
-                // upgrading to a top-speakers list once there's room.
-                if (showSpeakers) ...[
-                  const SizedBox(height: 8),
-                  _TopSpeakersList(speakers: item.topSpeakers),
-                ] else if (hasParties) ...[
-                  const SizedBox(height: 6),
-                  _PartyContributionBar(breakdown: item.partyBreakdown),
-                ],
-              ],
-            ),
-          );
-        }
+        final Widget extra = _AdaptiveExtraContent(
+          extraChildren: extraChildren,
+          showChips: showChips,
+          showMeta: showMeta,
+          showSpeakers: showSpeakers,
+          showPie: showPie,
+          hasParties: hasParties,
+          item: item,
+        );
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
@@ -588,6 +576,105 @@ class _DebateCardContent extends StatelessWidget {
   void _openBill(BuildContext context, String billTitle) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => BillView(billTitle: billTitle)),
+    );
+  }
+}
+
+/// Adaptive container for the debate card's extra content.
+/// It uses a LayoutBuilder to calculate the remaining available space and dynamically
+/// sizes and filters its children to avoid clipping the speakers list.
+class _AdaptiveExtraContent extends StatelessWidget {
+  final List<Widget> extraChildren;
+  final bool showChips;
+  final bool showMeta;
+  final bool showSpeakers;
+  final bool showPie;
+  final bool hasParties;
+  final DebateFeedItem item;
+
+  const _AdaptiveExtraContent({
+    required this.extraChildren,
+    required this.showChips,
+    required this.showMeta,
+    required this.showSpeakers,
+    required this.showPie,
+    required this.hasParties,
+    required this.item,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxHeight = constraints.maxHeight;
+        final textScaler = MediaQuery.textScalerOf(context);
+
+        // 1. Calculate estimated height of extraChildren
+        double extraChildrenHeight = 0;
+        if (showChips) {
+          final double baseChipFontSize = Theme.of(context).textTheme.labelSmall?.fontSize ?? 10.0;
+          final double scaledChipFontSize = textScaler.scale(baseChipFontSize);
+          final double chipHeight = scaledChipFontSize + 8.0;
+          extraChildrenHeight += chipHeight + 6.0;
+        }
+        if (showMeta) {
+          final double baseMetaFontSize = Theme.of(context).textTheme.labelMedium?.fontSize ?? 11.0;
+          final double scaledMetaFontSize = textScaler.scale(baseMetaFontSize);
+          final double metaHeight = scaledMetaFontSize * 1.3;
+          extraChildrenHeight += metaHeight + 6.0;
+        }
+
+        final remainingHeight = maxHeight - extraChildrenHeight;
+
+        // 2. Determine how many speakers can fit
+        // Spacing: 8.0, row height: 38.0
+        int visibleSpeakerCount = 0;
+        if (showSpeakers && item.topSpeakers.isNotEmpty) {
+          for (int i = 1; i <= item.topSpeakers.length; i++) {
+            final needed = 8.0 + (38.0 * i);
+            if (needed <= remainingHeight) {
+              visibleSpeakerCount = i;
+            } else {
+              break;
+            }
+          }
+        }
+
+        final hasVisibleSpeakers = visibleSpeakerCount > 0;
+
+        if (showPie && hasParties && hasVisibleSpeakers) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ...extraChildren,
+              const SizedBox(height: 8),
+              _TopSpeakersList(speakers: item.topSpeakers.take(visibleSpeakerCount).toList()),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _PartyContributionPie(breakdown: item.partyBreakdown),
+              ),
+            ],
+          );
+        }
+
+        final showSpeakersList = showSpeakers && hasVisibleSpeakers;
+        final showPartyBar = !showSpeakersList && hasParties && (remainingHeight >= 12.0);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...extraChildren,
+            if (showSpeakersList) ...[
+              const SizedBox(height: 8),
+              _TopSpeakersList(speakers: item.topSpeakers.take(visibleSpeakerCount).toList()),
+            ] else if (showPartyBar) ...[
+              const SizedBox(height: 6),
+              _PartyContributionBar(breakdown: item.partyBreakdown),
+            ],
+          ],
+        );
+      },
     );
   }
 }

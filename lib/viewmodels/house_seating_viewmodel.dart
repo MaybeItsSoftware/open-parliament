@@ -74,7 +74,7 @@ class HouseSeatingViewModel extends ChangeNotifier {
         for (final group in groups) ...group.members,
       ];
 
-      final positions = buildHemicycleLayout(orderedMembers.length);
+      final positions = buildChamberLayout(house: house, members: orderedMembers);
       final seats = <SeatingSeat>[
         for (var i = 0; i < orderedMembers.length; i++)
           SeatingSeat(

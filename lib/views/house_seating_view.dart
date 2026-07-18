@@ -20,6 +20,7 @@ class HouseSeatingView extends StatefulWidget {
 
 class _HouseSeatingViewState extends State<HouseSeatingView> {
   late HouseSeatingViewModel _vm;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -31,6 +32,7 @@ class _HouseSeatingViewState extends State<HouseSeatingView> {
   @override
   void dispose() {
     _vm.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -90,8 +92,8 @@ class _HouseSeatingViewState extends State<HouseSeatingView> {
         children: [
           _buildSummary(context, vm),
           const SizedBox(height: 16),
-          AspectRatio(
-            aspectRatio: 1.4,
+          SizedBox(
+            height: 350,
             child: Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
@@ -101,10 +103,23 @@ class _HouseSeatingViewState extends State<HouseSeatingView> {
                 ),
               ),
               child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: _SeatMap(
-                  seats: vm.seats,
-                  onSeatTap: (seat) => _showSeatDetails(context, seat.member),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Scrollbar(
+                  controller: _scrollController,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: SizedBox(
+                      width: 1200,
+                      child: _SeatMap(
+                        seats: vm.seats,
+                        house: vm.house,
+                        onSeatTap: (seat) => _showSeatDetails(context, seat.member),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -300,9 +315,14 @@ class _BreakdownChip extends StatelessWidget {
 
 class _SeatMap extends StatefulWidget {
   final List<SeatingSeat> seats;
+  final HouseType house;
   final ValueChanged<SeatingSeat> onSeatTap;
 
-  const _SeatMap({required this.seats, required this.onSeatTap});
+  const _SeatMap({
+    required this.seats,
+    required this.house,
+    required this.onSeatTap,
+  });
 
   @override
   State<_SeatMap> createState() => _SeatMapState();
@@ -328,8 +348,10 @@ class _SeatMapState extends State<_SeatMap> {
             size: size,
             painter: _SeatMapPainter(
               seats: widget.seats,
+              house: widget.house,
               dotRadius: radius,
               selectedId: _selectedId,
+              colorScheme: Theme.of(context).colorScheme,
             ),
           ),
         );
@@ -339,14 +361,16 @@ class _SeatMapState extends State<_SeatMap> {
 
   double _dotRadius(Size size, int seatCount) {
     if (seatCount == 0) return 0;
-    final base = size.shortestSide / (math.sqrt(seatCount) * 3.2);
-    return base.clamp(2.0, 6.0);
+    // We adjust the dot size calculation slightly to fit the dense grid lines.
+    final base = size.shortestSide / (math.sqrt(seatCount) * 2.8);
+    return base.clamp(2.0, 5.5);
   }
 
   SeatingSeat? _hitTest(Offset tap, Size size, double radius) {
     SeatingSeat? closest;
     var closestDistance = double.infinity;
-    final threshold = radius * 1.7;
+    // Keep target threshold reasonably sized for tap target accuracy on mobile.
+    final threshold = radius * 2.2;
     for (final seat in widget.seats) {
       final pos = Offset(
         seat.position.dx * size.width,
@@ -364,22 +388,177 @@ class _SeatMapState extends State<_SeatMap> {
 
 class _SeatMapPainter extends CustomPainter {
   final List<SeatingSeat> seats;
+  final HouseType house;
   final double dotRadius;
   final int? selectedId;
+  final ColorScheme colorScheme;
 
   _SeatMapPainter({
     required this.seats,
+    required this.house,
     required this.dotRadius,
     required this.selectedId,
+    required this.colorScheme,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // 1. Draw Carpet/Aisle
+    final carpetPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = house == HouseType.commons
+          ? const Color(0x0C006548)
+          : const Color(0x0CB50938);
+
+    // Main floor carpet
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(0.12 * w, 0.40 * h, 0.96 * w, 0.60 * h),
+        const Radius.circular(4),
+      ),
+      carpetPaint,
+    );
+
+    // Gangway carpet
+    if (house == HouseType.commons) {
+      canvas.drawRect(
+        Rect.fromLTRB(0.52 * w, 0.04 * h, 0.58 * w, 0.96 * h),
+        carpetPaint,
+      );
+    } else {
+      canvas.drawRect(
+        Rect.fromLTRB(0.46 * w, 0.04 * h, 0.52 * w, 0.96 * h),
+        carpetPaint,
+      );
+    }
+
+    // 2. Draw Bench Lines
+    final benchPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = dotRadius * 2.2
+      ..strokeCap = StrokeCap.round
+      ..color = house == HouseType.commons
+          ? const Color(0x1F006548)
+          : const Color(0x1FB50938);
+
+    // Government side (top)
+    for (final y in [0.08, 0.15, 0.22, 0.29, 0.36]) {
+      final leftStart = Offset(0.16 * w, y * h);
+      final leftEnd = Offset((house == HouseType.commons ? 0.52 : 0.46) * w, y * h);
+      canvas.drawLine(leftStart, leftEnd, benchPaint);
+
+      final rightStart = Offset((house == HouseType.commons ? 0.58 : 0.52) * w, y * h);
+      final rightEnd = Offset((house == HouseType.commons ? 0.94 : 0.80) * w, y * h);
+      canvas.drawLine(rightStart, rightEnd, benchPaint);
+    }
+
+    // Opposition side (bottom)
+    for (final y in [0.64, 0.71, 0.78, 0.85, 0.92]) {
+      final leftStart = Offset(0.16 * w, y * h);
+      final leftEnd = Offset((house == HouseType.commons ? 0.52 : 0.46) * w, y * h);
+      canvas.drawLine(leftStart, leftEnd, benchPaint);
+
+      final rightStart = Offset((house == HouseType.commons ? 0.58 : 0.52) * w, y * h);
+      final rightEnd = Offset((house == HouseType.commons ? 0.94 : 0.80) * w, y * h);
+      canvas.drawLine(rightStart, rightEnd, benchPaint);
+    }
+
+    // Crossbenches (Lords only)
+    if (house == HouseType.lords) {
+      for (final x in [0.82, 0.85, 0.88, 0.91, 0.94]) {
+        canvas.drawLine(Offset(x * w, 0.20 * h), Offset(x * w, 0.80 * h), benchPaint);
+      }
+    }
+
+    // 3. Draw Speaker's Chair / Throne
+    const woodColor = Color(0xFF8D6E63);
+    const goldColor = Color(0xFFFFB300);
+    const crimsonColor = Color(0xFFC62828);
+
+    if (house == HouseType.commons) {
+      // Speaker's Chair canopy / outline
+      final chairPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color = woodColor;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(0.03 * w, 0.42 * h, 0.09 * w, 0.58 * h),
+          const Radius.circular(4),
+        ),
+        chairPaint,
+      );
+      // Chair seat cushion (green)
+      final cushionPaint = Paint()
+        ..style = PaintingStyle.fill
+        ..color = const Color(0xFF006548);
+      canvas.drawRect(
+        Rect.fromLTRB(0.045 * w, 0.45 * h, 0.075 * w, 0.55 * h),
+        cushionPaint,
+      );
+    } else {
+      // Lords Throne (gold and crimson)
+      final thronePaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color = goldColor;
+      canvas.drawRect(
+        Rect.fromLTRB(0.03 * w, 0.42 * h, 0.08 * w, 0.58 * h),
+        thronePaint,
+      );
+      final throneFill = Paint()
+        ..style = PaintingStyle.fill
+        ..color = crimsonColor.withValues(alpha: 0.4);
+      canvas.drawRect(
+        Rect.fromLTRB(0.04 * w, 0.44 * h, 0.07 * w, 0.56 * h),
+        throneFill,
+      );
+      
+      // Woolsack (red cushion in the center)
+      final woolsackPaint = Paint()
+        ..style = PaintingStyle.fill
+        ..color = crimsonColor;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(0.10 * w, 0.47 * h, 0.13 * w, 0.53 * h),
+          const Radius.circular(3),
+        ),
+        woolsackPaint,
+      );
+    }
+
+    // 4. Draw Clerk's Table
+    final tablePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = woodColor;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(0.15 * w, 0.45 * h, 0.24 * w, 0.55 * h),
+        const Radius.circular(2),
+      ),
+      tablePaint,
+    );
+    // The Mace
+    final macePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..color = goldColor;
+    canvas.drawLine(
+      Offset(0.17 * w, 0.50 * h),
+      Offset(0.22 * w, 0.50 * h),
+      macePaint,
+    );
+
+    // 5. Draw Seats/Dots
     final paint = Paint()..style = PaintingStyle.fill;
     final highlightPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
-      ..color = Colors.black.withValues(alpha: 0.65);
+      ..color = colorScheme.onSurface;
 
     for (final seat in seats) {
       final pos = Offset(
@@ -397,6 +576,7 @@ class _SeatMapPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SeatMapPainter oldDelegate) {
     return oldDelegate.seats != seats ||
+        oldDelegate.house != house ||
         oldDelegate.dotRadius != dotRadius ||
         oldDelegate.selectedId != selectedId;
   }
