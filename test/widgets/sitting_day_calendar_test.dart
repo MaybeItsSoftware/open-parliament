@@ -235,6 +235,67 @@ void main() {
   });
 
   testWidgets(
+      'recess highlighting never applies to days after lastDay',
+      (tester) async {
+    // "Today" is the 14th. The 11th-20th are a recess, but a capped
+    // recessDaysInMonth (as the real view-model produces) only maps the
+    // 11th-14th to it — the 15th-20th are future and unmapped.
+    final recess = RecessPeriod(
+      description: 'November recess',
+      startDate: DateTime(2024, 11, 11),
+      endDate: DateTime(2024, 11, 20),
+    );
+    final recessDays = <DateTime, RecessPeriod>{
+      for (var d = 11; d <= 14; d++) DateTime(2024, 11, d): recess,
+    };
+    final vm = _StubViewModel({DateTime(2024, 11, 4)}, recessDays: recessDays);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SittingDayCalendar(
+            viewModel: vm,
+            initialMonth: DateTime(2024, 11),
+            selectedDay: null,
+            lastDay: DateTime(2024, 11, 14),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The 18th (future, unmapped) reads exactly like a plain non-sitting day.
+    final plainNonSitting = tester.widget<Text>(find.text('7')).style?.color;
+    expect(
+      tester.widget<Text>(find.text('18')).style?.color,
+      plainNonSitting,
+    );
+
+    // Tapping the 12th (past, mapped) activates the recess — but the active
+    // tint must not bleed onto the 18th, even though it's within the same
+    // recess's raw date range.
+    await tester.tap(find.text('12'));
+    await tester.pumpAndSettle();
+    expect(find.text('November recess'), findsNWidgets(2));
+    expect(
+      tester.widget<Text>(find.text('18')).style?.color,
+      plainNonSitting,
+    );
+
+    // Tapping the 18th itself (disabled, future, unmapped) does not surface
+    // the banner — it collapses back out just like tapping any other plain
+    // non-recess day would.
+    await tester.tap(find.text('18'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SizeTransition>(find.byType(SizeTransition))
+          .sizeFactor
+          .value,
+      0,
+    );
+  });
+
+  testWidgets(
       'tapping a recess day highlights the range and names it in a banner',
       (tester) async {
     final recess = RecessPeriod(
@@ -299,13 +360,22 @@ void main() {
     expect(tapped.style?.color, isNot(idleColor));
     expect(sibling.style?.color, tapped.style?.color);
 
-    // Tapping a plain non-sitting day clears the highlight and banner.
+    // Tapping a plain non-sitting day clears the highlight and animates the
+    // banner closed. Its content stays mounted (collapsed to zero height)
+    // rather than disappearing outright, so it can animate open again.
     await tester.tap(find.text('7'));
     await tester.pumpAndSettle();
-    expect(find.text('November recess'), findsOneWidget);
+    expect(find.text('November recess'), findsNWidgets(2));
     expect(
       find.text('11–15 Nov 2024 · Parliament was not sitting'),
-      findsNothing,
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<SizeTransition>(find.byType(SizeTransition))
+          .sizeFactor
+          .value,
+      0,
     );
     expect(tester.widget<Text>(find.text('12')).style?.color, idleColor);
   });

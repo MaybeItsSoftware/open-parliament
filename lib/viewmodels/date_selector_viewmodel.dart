@@ -282,6 +282,8 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// Days covered by a period for either house are included; the calendar
   /// only decorates days that aren't sitting days, so a day where one house
   /// sat while the other was in recess still renders as a sitting day.
+  /// Capped at today, like [sittingDaysInMonth] — the API publishes recess
+  /// dates in advance, but a not-yet-happened recess shouldn't be surfaced.
   /// Results are cached per year-month like [sittingDaysInMonth]. A failure
   /// yields an empty map (uncached, so paging back retries) — recess labels
   /// are decorative and must never block the calendar.
@@ -290,12 +292,16 @@ class DateSelectorViewModel extends ChangeNotifier {
     final cached = _recessDaysByMonth[key];
     if (cached != null) return cached;
 
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
     final result = <DateTime, RecessPeriod>{};
     try {
       final periods = await _service.getRecessPeriods(month.year, month.month);
       final lastDayOfMonth = DateTime(month.year, month.month + 1, 0).day;
       for (var d = 1; d <= lastDayOfMonth; d++) {
         final day = DateTime(month.year, month.month, d);
+        if (day.isAfter(today)) continue;
         for (final RecessPeriod period in periods) {
           if (period.contains(day)) {
             result[day] = period;
