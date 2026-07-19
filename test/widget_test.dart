@@ -226,7 +226,13 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Today’s Key Debates'), findsOneWidget);
+    // Smoke-checks the redesigned chrome (top bar + chamber toggle), which
+    // renders synchronously and doesn't depend on landing-day resolution.
+    expect(find.byTooltip('Menu'), findsOneWidget);
+    expect(find.text('All'), findsOneWidget);
+    expect(find.text('Commons'), findsOneWidget);
+    expect(find.text('Lords'), findsOneWidget);
+    expect(find.text('Committees'), findsOneWidget);
   });
 
   testWidgets(

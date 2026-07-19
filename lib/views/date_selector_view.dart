@@ -8,11 +8,25 @@ import 'package:provider/provider.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/house_colors.dart';
 import '../utils/party_colors.dart';
+import '../utils/speech_timecodes.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
 import '../widgets/sitting_day_calendar.dart';
 import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'transcript_view.dart';
+
+enum _ChamberFilter { all, commons, lords, committees }
+
+/// Categorises a [DebateFeedItem.house] value the same way [_houseAccentColor]
+/// does, so the chamber toggle and the card accent colours always agree.
+_ChamberFilter _chamberCategoryForHouse(String house) {
+  final h = house.toLowerCase();
+  if (h.contains('lords') || h.contains('grand committee')) {
+    return _ChamberFilter.lords;
+  }
+  if (h.contains('committee')) return _ChamberFilter.committees;
+  return _ChamberFilter.commons; // Commons, Westminster Hall default.
+}
 
 /// The redesigned landing screen for the app's main page.
 class DateSelectorView extends StatefulWidget {
@@ -37,6 +51,9 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   /// state instead of "today" (which would otherwise flash a false "no
   /// debates" card whenever today turns out to have none).
   bool _resolvingLandingDay = true;
+
+  /// Which chamber's debates to show in the feed below.
+  _ChamberFilter _chamberFilter = _ChamberFilter.all;
 
   @override
   void initState() {
@@ -89,37 +106,21 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                           children: [
                             _buildTopBar(context, vm, selectedDay),
                             const SizedBox(height: 20),
-                            Text(
-                              'Today’s Key Debates',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                            ),
+                            const SizedBox(height: 12),
+                            _buildChamberToggle(),
                             const SizedBox(height: 12),
                             Expanded(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onHorizontalDragEnd: (details) {
-                                  final velocity =
-                                      details.primaryVelocity ?? 0;
+                                  final velocity = details.primaryVelocity ?? 0;
                                   if (velocity > 300) {
                                     unawaited(
-                                      _shiftBySittingDay(
-                                        vm,
-                                        selectedDay,
-                                        -1,
-                                      ),
+                                      _shiftBySittingDay(vm, selectedDay, -1),
                                     );
                                   } else if (velocity < -300) {
                                     unawaited(
-                                      _shiftBySittingDay(
-                                        vm,
-                                        selectedDay,
-                                        1,
-                                      ),
+                                      _shiftBySittingDay(vm, selectedDay, 1),
                                     );
                                   }
                                 },
@@ -150,16 +151,15 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     return Row(
       children: [
         Builder(
-          builder: (context) => IconButton(
-            icon: const Icon(Icons.menu),
-            tooltip: 'Menu',
-            onPressed: () => Scaffold.of(context).openDrawer(),
-          ),
+          builder:
+              (context) => IconButton(
+                icon: const Icon(Icons.menu),
+                tooltip: 'Menu',
+                onPressed: () => Scaffold.of(context).openDrawer(),
+              ),
         ),
         const SizedBox(width: 4),
-        Expanded(
-          child: _buildContextualDateSelector(context, vm, selectedDay),
-        ),
+        Expanded(child: _buildContextualDateSelector(context, vm, selectedDay)),
       ],
     );
   }
@@ -206,8 +206,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                       _friendlyDate(selectedDay),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -218,13 +218,58 @@ class _DateSelectorViewState extends State<DateSelectorView> {
             icon: const Icon(Icons.chevron_right),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            onPressed: canMoveForward
-                ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
-                : null,
+            onPressed:
+                canMoveForward
+                    ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
+                    : null,
           ),
         ],
       ),
     );
+  }
+
+  /// Maps a feed item's (house, section) pair to its presentation group.
+  /// `rank` fixes the order groups appear in: chamber proceedings first,
+  /// then the sitting venues, then written/paper material.
+  static ({String name, int rank}) _feedGroupFor(
+    String house,
+    String? section,
+  ) {
+    final s = (section ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final h = house.toLowerCase();
+    if (s == 'westhall' ||
+        s.contains('westminsterhall') ||
+        h.contains('westminster hall')) {
+      return (name: 'Westminster Hall', rank: 1);
+    }
+    if (s.contains('grandcommittee') || h.contains('grand committee')) {
+      return (name: 'Grand Committee', rank: 3);
+    }
+    if (s == 'wms' || s.contains('writtenstatement')) {
+      return (
+        name: h.contains('lords')
+            ? 'Written Statements (Lords)'
+            : 'Written Statements',
+        rank: 5,
+      );
+    }
+    if (s.contains('petition')) return (name: 'Petitions', rank: 6);
+    if (s.contains('correction')) return (name: 'Corrections', rank: 7);
+    if (h.contains('committee')) return (name: 'Committees', rank: 4);
+    if (h.contains('lords')) return (name: 'House of Lords', rank: 2);
+    return (name: 'House of Commons', rank: 0);
+  }
+
+  /// Whether a feed item is paper business (written statements, petitions,
+  /// written corrections) rather than a spoken debate. Paper business has no
+  /// meaningful "start time" and reads as a single reference list, so it's
+  /// kept out of the chronological "All" feed and shown in its own section.
+  static bool _isPaperSection(String house, String? section) {
+    final s = (section ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    return s == 'wms' ||
+        s.contains('writtenstatement') ||
+        s.contains('petition') ||
+        s.contains('correction');
   }
 
   Widget _buildDebatesFeed(DateSelectorViewModel vm, DateTime day) {
@@ -253,23 +298,200 @@ class _DateSelectorViewState extends State<DateSelectorView> {
               : _buildNoDebatesCard(day);
         }
 
-        return ListView.separated(
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final item = items[index];
-            return SizedBox(
-              height: _debateCardHeight(item.durationMinutes),
-              child: _HouseAccentCard(
-                house: item.house,
-                onTap: () =>
-                    _navigateToTranscript(day, debateId: item.debateId),
-                child: _DebateCardContent(item: item),
-              ),
-            );
-          },
+        final filteredItems =
+            _chamberFilter == _ChamberFilter.all
+                ? items
+                : items
+                    .where(
+                      (i) =>
+                          _chamberCategoryForHouse(i.house) == _chamberFilter,
+                    )
+                    .toList();
+        if (filteredItems.isEmpty) {
+          return _buildNoChamberDebatesCard(_chamberFilter);
+        }
+
+        final rows = _buildFeedRows(
+          filteredItems,
+          result?.sessions ?? const <SittingSession>[],
+          day,
+        );
+        return ListView.builder(
+          itemCount: rows.length,
+          itemBuilder: (context, index) => rows[index],
         );
       },
+    );
+  }
+
+  /// Builds the feed rows for the current chamber filter. The "All" filter
+  /// shows debates in chronological order with paper business (written
+  /// statements, petitions, corrections) collected in its own section below;
+  /// single-chamber filters keep the venue-grouped layout, since a chamber
+  /// can still span more than one venue (e.g. Commons + Westminster Hall).
+  List<Widget> _buildFeedRows(
+    List<DebateFeedItem> items,
+    List<SittingSession> sessions,
+    DateTime day,
+  ) {
+    if (_chamberFilter == _ChamberFilter.all) {
+      return _buildAllFeedRows(items, day);
+    }
+    return _buildGroupedFeedRows(items, sessions, day);
+  }
+
+  /// Flattens the feed into venue-grouped rows: one slim header per group
+  /// (venue name + sitting start time, when the day's Hansard header node
+  /// provides one), followed by that venue's debate cards in running order.
+  List<Widget> _buildGroupedFeedRows(
+    List<DebateFeedItem> items,
+    List<SittingSession> sessions,
+    DateTime day,
+  ) {
+    final sorted = List<DebateFeedItem>.from(items)
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final itemsByGroup = <String, List<DebateFeedItem>>{};
+    final rankByGroup = <String, int>{};
+    for (final item in sorted) {
+      final group = _feedGroupFor(item.house, item.section);
+      itemsByGroup.putIfAbsent(group.name, () => []).add(item);
+      rankByGroup[group.name] = group.rank;
+    }
+
+    final startTimeByGroup = <String, String>{};
+    for (final session in sessions) {
+      final startTime = session.startTime;
+      if (startTime == null) continue;
+      final group = _feedGroupFor(session.house, session.section);
+      startTimeByGroup.putIfAbsent(group.name, () => startTime);
+    }
+
+    final groupNames = itemsByGroup.keys.toList()
+      ..sort((a, b) => rankByGroup[a]!.compareTo(rankByGroup[b]!));
+
+    final rows = <Widget>[];
+    for (var i = 0; i < groupNames.length; i++) {
+      final name = groupNames[i];
+      final groupItems = itemsByGroup[name]!;
+      rows.add(
+        Padding(
+          padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8),
+          child: _FeedGroupHeader(
+            name: name,
+            startTime: startTimeByGroup[name],
+            accent: _houseAccentColor(groupItems.first.house),
+          ),
+        ),
+      );
+      for (final item in groupItems) {
+        rows.add(_buildDebateCardRow(item, day));
+      }
+    }
+    return rows;
+  }
+
+  /// Builds the "All" filter's rows: every debate in chronological order
+  /// (by first spoken timecode, falling back to feed order for items with no
+  /// timecode), followed by a single "Papers" section for written
+  /// statements, petitions, and written corrections — none of which have a
+  /// meaningful spoken start time.
+  List<Widget> _buildAllFeedRows(List<DebateFeedItem> items, DateTime day) {
+    final debateItems = <DebateFeedItem>[];
+    final paperItems = <DebateFeedItem>[];
+    for (final item in items) {
+      if (_isPaperSection(item.house, item.section)) {
+        paperItems.add(item);
+      } else {
+        debateItems.add(item);
+      }
+    }
+
+    debateItems.sort((a, b) {
+      final aSeconds = _startSeconds(a);
+      final bSeconds = _startSeconds(b);
+      if (aSeconds != null && bSeconds != null) {
+        final cmp = aSeconds.compareTo(bSeconds);
+        if (cmp != 0) return cmp;
+      } else if (aSeconds != null) {
+        return -1;
+      } else if (bSeconds != null) {
+        return 1;
+      }
+      return a.order.compareTo(b.order);
+    });
+
+    final rows = <Widget>[
+      for (final item in debateItems)
+        _buildDebateCardRow(item, day, showVenue: true),
+    ];
+
+    if (paperItems.isNotEmpty) {
+      paperItems.sort((a, b) => a.order.compareTo(b.order));
+      final itemsByGroup = <String, List<DebateFeedItem>>{};
+      final rankByGroup = <String, int>{};
+      for (final item in paperItems) {
+        final group = _feedGroupFor(item.house, item.section);
+        itemsByGroup.putIfAbsent(group.name, () => []).add(item);
+        rankByGroup[group.name] = group.rank;
+      }
+      final groupNames = itemsByGroup.keys.toList()
+        ..sort((a, b) => rankByGroup[a]!.compareTo(rankByGroup[b]!));
+
+      rows.add(
+        Padding(
+          padding: EdgeInsets.only(top: rows.isEmpty ? 0 : 20, bottom: 8),
+          child: Text(
+            'Papers',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+      for (var i = 0; i < groupNames.length; i++) {
+        final name = groupNames[i];
+        final groupItems = itemsByGroup[name]!;
+        rows.add(
+          Padding(
+            padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8),
+            child: _FeedGroupHeader(
+              name: name,
+              accent: _houseAccentColor(groupItems.first.house),
+            ),
+          ),
+        );
+        for (final item in groupItems) {
+          rows.add(_buildDebateCardRow(item, day));
+        }
+      }
+    }
+
+    return rows;
+  }
+
+  /// The item's first spoken timecode as seconds since midnight, or `null`
+  /// when it has none (parsed once here so chronological sort can short of
+  /// re-parsing on every comparison).
+  int? _startSeconds(DebateFeedItem item) {
+    final raw = item.startTimecode;
+    return raw != null ? parseTimecodeToSeconds(raw) : null;
+  }
+
+  Widget _buildDebateCardRow(
+    DebateFeedItem item,
+    DateTime day, {
+    bool showVenue = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: SizedBox(
+        height: _debateCardHeight(item.durationMinutes),
+        child: _HouseAccentCard(
+          house: item.house,
+          onTap: () => _navigateToTranscript(day, debateId: item.debateId),
+          child: _DebateCardContent(item: item, showVenue: showVenue),
+        ),
+      ),
     );
   }
 
@@ -286,12 +508,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => SittingDayCalendar(
-        viewModel: vm,
-        initialMonth: DateTime(selectedDay.year, selectedDay.month),
-        selectedDay: selectedDay,
-        lastDay: today,
-      ),
+      builder:
+          (_) => SittingDayCalendar(
+            viewModel: vm,
+            initialMonth: DateTime(selectedDay.year, selectedDay.month),
+            selectedDay: selectedDay,
+            lastDay: today,
+          ),
     );
     if (picked == null) return;
 
@@ -321,9 +544,10 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   ) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final next = deltaDays < 0
-        ? await vm.previousVisibleSittingDay(current)
-        : await vm.nextVisibleSittingDay(current);
+    final next =
+        deltaDays < 0
+            ? await vm.previousVisibleSittingDay(current)
+            : await vm.nextVisibleSittingDay(current);
 
     if (next == null) {
       if (!mounted) return;
@@ -334,6 +558,71 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     if (next.isAfter(today)) return;
     vm.setFocusedDay(next);
     vm.selectDay(next);
+  }
+
+  Widget _buildChamberToggle() {
+    final theme = Theme.of(context);
+    return SegmentedButton<_ChamberFilter>(
+      segments: const [
+        ButtonSegment(value: _ChamberFilter.all, label: Text('All')),
+        ButtonSegment(value: _ChamberFilter.commons, label: Text('Commons')),
+        ButtonSegment(value: _ChamberFilter.lords, label: Text('Lords')),
+        ButtonSegment(
+          value: _ChamberFilter.committees,
+          label: Text('Committees'),
+        ),
+      ],
+      selected: {_chamberFilter},
+      onSelectionChanged: (selection) {
+        if (selection.isNotEmpty) {
+          setState(() => _chamberFilter = selection.first);
+        }
+      },
+      showSelectedIcon: false,
+      style: SegmentedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        selectedBackgroundColor: theme.colorScheme.primary,
+        selectedForegroundColor: theme.colorScheme.onPrimary,
+      ),
+    );
+  }
+
+  Widget _buildNoChamberDebatesCard(_ChamberFilter filter) {
+    return Center(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'No ${_chamberFilterLabel(filter)} debates for this sitting day.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed:
+                    () => setState(() => _chamberFilter = _ChamberFilter.all),
+                child: const Text('Show all chambers'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _chamberFilterLabel(_ChamberFilter filter) {
+    switch (filter) {
+      case _ChamberFilter.commons:
+        return 'Commons';
+      case _ChamberFilter.lords:
+        return 'Lords';
+      case _ChamberFilter.committees:
+        return 'Committee';
+      case _ChamberFilter.all:
+        return '';
+    }
   }
 
   Widget _buildNoDebatesCard(DateTime day) {
@@ -378,19 +667,20 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 
   void _showInfoMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _navigateToTranscript(DateTime day, {String debateId = ''}) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TranscriptView(
-          date: DateSelectorViewModel.formatDate(day),
-          displayDate: _friendlyDate(day),
-          initialDebateId: debateId.isNotEmpty ? debateId : null,
-        ),
+        builder:
+            (_) => TranscriptView(
+              date: DateSelectorViewModel.formatDate(day),
+              displayDate: _friendlyDate(day),
+              initialDebateId: debateId.isNotEmpty ? debateId : null,
+            ),
       ),
     );
   }
@@ -432,7 +722,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 class _DebateCardContent extends StatelessWidget {
   final DebateFeedItem item;
 
-  const _DebateCardContent({required this.item});
+  /// Whether to show the item's venue in the meta row. Needed in the "All"
+  /// filter's chronological debate list, which has no per-venue group header
+  /// to convey that context; grouped layouts pass `false` since their header
+  /// already names the venue.
+  final bool showVenue;
+
+  const _DebateCardContent({required this.item, this.showVenue = false});
 
   // Height thresholds (px) at which each extra tier becomes visible.
   static const double _metaTier = 100;
@@ -455,7 +751,8 @@ class _DebateCardContent extends StatelessWidget {
         final isNarrow = width < _narrowWidth;
         final titleMaxLines = isNarrow ? 2 : (height >= _metaTier ? 2 : 1);
         final hasParties = item.partyBreakdown.isNotEmpty;
-        final showMeta = height >= _metaTier && _metaSegments(item).isNotEmpty;
+        final showMeta =
+            height >= _metaTier && _metaSegments(item, showVenue).isNotEmpty;
         final chips = _contextChips(context);
         final showChips = height >= _chipTier && chips.isNotEmpty;
         final showSpeakers =
@@ -476,12 +773,12 @@ class _DebateCardContent extends StatelessWidget {
           if (showMeta) ...[
             const SizedBox(height: 6),
             Text(
-              _metaSegments(item).join('  ·  '),
+              _metaSegments(item, showVenue).join('  ·  '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ];
@@ -529,8 +826,13 @@ class _DebateCardContent extends StatelessWidget {
     );
   }
 
-  static List<String> _metaSegments(DebateFeedItem item) {
+  static List<String> _metaSegments(DebateFeedItem item, bool showVenue) {
     final segments = <String>[];
+    if (showVenue) {
+      segments.add(
+        _DateSelectorViewState._feedGroupFor(item.house, item.section).name,
+      );
+    }
     if (item.speakerCount > 0) {
       segments.add(
         '${item.speakerCount} '
@@ -550,16 +852,12 @@ class _DebateCardContent extends StatelessWidget {
     return segments;
   }
 
-  /// Context chips shown above the meta row: the debate's section/type and, if
-  /// the title names a bill, a tappable chip that opens bills.parliament.uk.
+  /// Context chips shown above the meta row: if the title names a bill, a
+  /// tappable chip that opens bills.parliament.uk. (The debate's venue is
+  /// conveyed by the feed's group header, or — when [showVenue] is set
+  /// because there is no group header — the meta row instead.)
   List<Widget> _contextChips(BuildContext context) {
     final chips = <Widget>[];
-    final section = item.section?.trim() ?? '';
-    // Skip the section when it just restates the title.
-    if (section.isNotEmpty &&
-        !item.title.toLowerCase().contains(section.toLowerCase())) {
-      chips.add(_StaticChip(label: section));
-    }
     final bill = item.relatedBillTitle;
     if (bill != null) {
       chips.add(
@@ -574,9 +872,9 @@ class _DebateCardContent extends StatelessWidget {
   }
 
   void _openBill(BuildContext context, String billTitle) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => BillView(billTitle: billTitle)),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => BillView(billTitle: billTitle)));
   }
 }
 
@@ -612,13 +910,15 @@ class _AdaptiveExtraContent extends StatelessWidget {
         // 1. Calculate estimated height of extraChildren
         double extraChildrenHeight = 0;
         if (showChips) {
-          final double baseChipFontSize = Theme.of(context).textTheme.labelSmall?.fontSize ?? 10.0;
+          final double baseChipFontSize =
+              Theme.of(context).textTheme.labelSmall?.fontSize ?? 10.0;
           final double scaledChipFontSize = textScaler.scale(baseChipFontSize);
           final double chipHeight = scaledChipFontSize + 8.0;
           extraChildrenHeight += chipHeight + 6.0;
         }
         if (showMeta) {
-          final double baseMetaFontSize = Theme.of(context).textTheme.labelMedium?.fontSize ?? 11.0;
+          final double baseMetaFontSize =
+              Theme.of(context).textTheme.labelMedium?.fontSize ?? 11.0;
           final double scaledMetaFontSize = textScaler.scale(baseMetaFontSize);
           final double metaHeight = scaledMetaFontSize * 1.3;
           extraChildrenHeight += metaHeight + 6.0;
@@ -648,7 +948,9 @@ class _AdaptiveExtraContent extends StatelessWidget {
             children: [
               ...extraChildren,
               const SizedBox(height: 8),
-              _TopSpeakersList(speakers: item.topSpeakers.take(visibleSpeakerCount).toList()),
+              _TopSpeakersList(
+                speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
+              ),
               const SizedBox(height: 8),
               Expanded(
                 child: _PartyContributionPie(breakdown: item.partyBreakdown),
@@ -658,7 +960,8 @@ class _AdaptiveExtraContent extends StatelessWidget {
         }
 
         final showSpeakersList = showSpeakers && hasVisibleSpeakers;
-        final showPartyBar = !showSpeakersList && hasParties && (remainingHeight >= 12.0);
+        final showPartyBar =
+            !showSpeakersList && hasParties && (remainingHeight >= 12.0);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -667,7 +970,9 @@ class _AdaptiveExtraContent extends StatelessWidget {
             ...extraChildren,
             if (showSpeakersList) ...[
               const SizedBox(height: 8),
-              _TopSpeakersList(speakers: item.topSpeakers.take(visibleSpeakerCount).toList()),
+              _TopSpeakersList(
+                speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
+              ),
             ] else if (showPartyBar) ...[
               const SizedBox(height: 6),
               _PartyContributionBar(breakdown: item.partyBreakdown),
@@ -675,31 +980,6 @@ class _AdaptiveExtraContent extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-/// A small non-interactive label chip (e.g. the debate's section/type).
-class _StaticChip extends StatelessWidget {
-  final String label;
-
-  const _StaticChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-      ),
     );
   }
 }
@@ -737,10 +1017,10 @@ class _ActionChipLink extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 label,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: color, fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(width: 2),
               Icon(Icons.open_in_new, size: 11, color: color),
@@ -820,18 +1100,29 @@ class _SpeakerAvatar extends StatelessWidget {
               border: Border.all(color: ringColor, width: 1.5),
             ),
             child: ClipOval(
-              child: url != null && url.isNotEmpty
-                  ? CachedNetworkImage(
-                      imageUrl: url,
-                      width: size,
-                      height: size,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) =>
-                          _initialsAvatar(theme, ringColor, speaker.name, size),
-                      errorWidget: (_, __, ___) =>
-                          _initialsAvatar(theme, ringColor, speaker.name, size),
-                    )
-                  : _initialsAvatar(theme, ringColor, speaker.name, size),
+              child:
+                  url != null && url.isNotEmpty
+                      ? CachedNetworkImage(
+                        imageUrl: url,
+                        width: size,
+                        height: size,
+                        fit: BoxFit.cover,
+                        placeholder:
+                            (_, __) => _initialsAvatar(
+                              theme,
+                              ringColor,
+                              speaker.name,
+                              size,
+                            ),
+                        errorWidget:
+                            (_, __, ___) => _initialsAvatar(
+                              theme,
+                              ringColor,
+                              speaker.name,
+                              size,
+                            ),
+                      )
+                      : _initialsAvatar(theme, ringColor, speaker.name, size),
             ),
           ),
           Positioned(
@@ -842,10 +1133,7 @@ class _SpeakerAvatar extends StatelessWidget {
               decoration: BoxDecoration(
                 color: ringColor,
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: theme.colorScheme.surface,
-                  width: 1,
-                ),
+                border: Border.all(color: theme.colorScheme.surface, width: 1),
               ),
               child: Text(
                 '${speaker.contributionCount}',
@@ -993,8 +1281,10 @@ class _PartyContributionPie extends StatelessWidget {
           limit = 5;
         }
 
-        final legendParties = limit > 0 ? breakdown.take(limit).toList() : <PartyContribution>[];
-        final remainder = limit > 0 ? breakdown.length - legendParties.length : 0;
+        final legendParties =
+            limit > 0 ? breakdown.take(limit).toList() : <PartyContribution>[];
+        final remainder =
+            limit > 0 ? breakdown.length - legendParties.length : 0;
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -1076,9 +1366,10 @@ class _PartyPiePainter extends CustomPainter {
     var start = -math.pi / 2;
     for (final p in breakdown) {
       final sweep = (p.count / total) * 2 * math.pi;
-      final paint = Paint()
-        ..style = PaintingStyle.fill
-        ..color = partyColor(p.partyToken);
+      final paint =
+          Paint()
+            ..style = PaintingStyle.fill
+            ..color = partyColor(p.partyToken);
       canvas.drawArc(rect, start, sweep, true, paint);
       start += sweep;
     }
@@ -1087,6 +1378,53 @@ class _PartyPiePainter extends CustomPainter {
   @override
   bool shouldRepaint(_PartyPiePainter old) =>
       old.total != total || old.breakdown != breakdown;
+}
+
+/// Slim section header above a venue's debate cards: an accent dot, the
+/// venue name, and (when known) the sitting start time.
+class _FeedGroupHeader extends StatelessWidget {
+  final String name;
+  final String? startTime;
+  final Color accent;
+
+  const _FeedGroupHeader({
+    required this.name,
+    required this.accent,
+    this.startTime,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Row(
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          if (startTime != null)
+            Text(
+              'Sat from $startTime',
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _HouseAccentCard extends StatelessWidget {

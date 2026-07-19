@@ -21,7 +21,7 @@ import 'database_service.dart';
 
 /// How long cached member profiles are considered fresh.
 const Duration _membersCacheTtl = Duration(days: 30);
-const Duration _recentBillsCacheTtl = Duration(minutes: 30);
+const Duration _billsListCacheTtl = Duration(minutes: 30);
 
 /// The high-level service that coordinates API calls with local SQLite caches.
 class ParliamentaryDataService {
@@ -37,6 +37,8 @@ class ParliamentaryDataService {
   final CouncillorEnrichmentService _councillorEnrichmentService;
   List<Map<String, dynamic>>? _recentBillsCache;
   DateTime? _recentBillsCachedAt;
+  List<Map<String, dynamic>>? _comingUpBillsCache;
+  DateTime? _comingUpBillsCachedAt;
 
   ParliamentaryDataService({
     DatabaseService? databaseService,
@@ -80,7 +82,7 @@ class ParliamentaryDataService {
       final cachedAt = _recentBillsCachedAt;
       if (cached != null &&
           cachedAt != null &&
-          DateTime.now().toUtc().difference(cachedAt) < _recentBillsCacheTtl) {
+          DateTime.now().toUtc().difference(cachedAt) < _billsListCacheTtl) {
         return cached;
       }
     }
@@ -93,6 +95,16 @@ class ParliamentaryDataService {
   }
 
   Future<List<Map<String, dynamic>>> fetchComingUpBills({int skip = 0, int take = 50}) async {
+    if (skip == 0) {
+      final cached = _comingUpBillsCache;
+      final cachedAt = _comingUpBillsCachedAt;
+      if (cached != null &&
+          cachedAt != null &&
+          DateTime.now().toUtc().difference(cachedAt) < _billsListCacheTtl) {
+        return cached;
+      }
+    }
+
     final rawSittings = await _billsApi.fetchComingUpSittings(skip: skip, take: take);
     final sittings = List<Map<String, dynamic>>.from(rawSittings);
 
@@ -103,23 +115,31 @@ class ParliamentaryDataService {
     });
 
     final billIds = <int>[];
+    final nextSittingDateByBillId = <int, String?>{};
     for (final s in sittings) {
       final id = (s["billId"] as num?)?.toInt();
       if (id != null && !billIds.contains(id)) {
         billIds.add(id);
+        nextSittingDateByBillId[id] = s["date"] as String?;
       }
     }
 
+    final details = await Future.wait(
+      billIds.map((id) => _billsApi.fetchBillDetail(id)),
+    );
+
     final bills = <Map<String, dynamic>>[];
-    for (final id in billIds) {
-      final detail = await _billsApi.fetchBillDetail(id);
+    for (var i = 0; i < billIds.length; i++) {
+      final detail = details[i];
       if (detail != null) {
-        final billSittings = sittings.where((s) => s["billId"] == id).toList();
-        if (billSittings.isNotEmpty) {
-          detail["_nextSittingDate"] = billSittings.first["date"];
-        }
+        detail["_nextSittingDate"] = nextSittingDateByBillId[billIds[i]];
         bills.add(detail);
       }
+    }
+
+    if (skip == 0 && bills.isNotEmpty) {
+      _comingUpBillsCache = bills;
+      _comingUpBillsCachedAt = DateTime.now().toUtc();
     }
     return bills;
   }
@@ -258,7 +278,17 @@ class ParliamentaryDataService {
   Future<List<Speech>> getSpeeches(String date) async {
     final alreadyCached = await _db.sittingDbExists(date);
     if (alreadyCached) {
-      return _loadSpeechesFromDb(date);
+      final cached = await _loadSpeechesFromDb(date);
+      // Rows cached before root_debate_id existed can't be grouped by root
+      // debate — re-fetch the day once to backfill, keeping the stale rows
+      // as an offline fallback.
+      final isLegacy = cached.any((s) => s.rootDebateId == null);
+      if (!isLegacy) return cached;
+      try {
+        return await _fetchAndCacheSitting(date);
+      } catch (_) {
+        return cached;
+      }
     }
     return _fetchAndCacheSitting(date);
   }
@@ -464,11 +494,18 @@ class ParliamentaryDataService {
     final debates = await _hansardApi.fetchSittingDebates(date);
     final speeches = <Speech>[];
 
+    // Chain the order index across roots so order_idx sorts the whole day
+    // in document order, not just within one root debate.
+    var nextOrderIndex = 0;
     for (final debate in debates) {
       final debateSpeeches = await _hansardApi.fetchDebateSpeeches(
         debate.id,
         debate.title,
+        startOrderIndex: nextOrderIndex,
       );
+      if (debateSpeeches.isNotEmpty) {
+        nextOrderIndex = debateSpeeches.last.orderIndex + 1;
+      }
       speeches.addAll(debateSpeeches);
     }
 
@@ -483,6 +520,10 @@ class ParliamentaryDataService {
   ) async {
     final db = await _db.openSittingDb(date);
     await db.transaction((txn) async {
+      // A legacy-cache refresh re-persists the whole day; clear first so
+      // rows that no longer exist upstream don't linger.
+      await txn.delete('speeches');
+      await txn.delete('debates');
       for (final d in debates) {
         await txn.insert(
           'debates',
@@ -503,9 +544,12 @@ class ParliamentaryDataService {
 
   Future<List<Speech>> _loadSpeechesFromDb(String date) async {
     final db = await _db.openSittingDb(date);
+    // rowid preserves insertion (= fetch/document) order even for legacy
+    // rows, whose order_idx restarts at 0 for every root debate and would
+    // interleave the day's debates if sorted on.
     final rows = await db.query(
       'speeches',
-      orderBy: 'order_idx ASC',
+      orderBy: 'rowid ASC',
     );
     return rows.map(Speech.fromDb).toList();
   }

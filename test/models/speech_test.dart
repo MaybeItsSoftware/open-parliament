@@ -228,6 +228,7 @@ void main() {
         id: 'sp-1',
         debateId: 'debate-1',
         debateTitle: 'Some Debate',
+        rootDebateId: 'root-1',
         itemType: 'Contribution',
         hrsTag: 'hs_para',
         memberId: 42,
@@ -244,6 +245,7 @@ void main() {
       expect(restored.id, speech.id);
       expect(restored.debateId, speech.debateId);
       expect(restored.debateTitle, speech.debateTitle);
+      expect(restored.rootDebateId, speech.rootDebateId);
       expect(restored.itemType, speech.itemType);
       expect(restored.hrsTag, speech.hrsTag);
       expect(restored.memberId, speech.memberId);

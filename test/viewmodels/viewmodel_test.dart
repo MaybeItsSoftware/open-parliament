@@ -195,7 +195,7 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<void> saveSpeakerAliasMemberIds(
       Map<String, int> aliasToMemberId) async {
     lastSavedSpeakerAliasMemberIds = Map<String, int>.from(aliasToMemberId);
-    speakerAliasMemberIds.addAll(aliasToMemberId);
+    speakerAliasMemberIds = Map<String, int>.from(speakerAliasMemberIds)..addAll(aliasToMemberId);
   }
 
   @override
@@ -937,6 +937,263 @@ void main() {
 
         expect(result.items, isEmpty);
         expect(result.isPendingPublication, isFalse);
+      });
+    });
+
+    group('feed assembly: day headers and root grouping', () {
+      final day = DateTime(2026, 7, 15);
+
+      const commonsHeader = Debate(
+        id: 'hoc',
+        title: 'House of Commons',
+        house: 'Commons',
+        section: 'Debate',
+        orderIndex: 0,
+      );
+      const oralAnswers = Debate(
+        id: 'oral',
+        title: 'Oral Answers to Questions',
+        house: 'Commons',
+        section: 'Debate',
+        orderIndex: 1,
+      );
+      const lordsHeader = Debate(
+        id: 'hol',
+        title: 'House of Lords',
+        house: 'Lords',
+        section: 'Debate',
+        orderIndex: 2,
+      );
+      const lordsQuestion = Debate(
+        id: 'lq',
+        title: 'Social Security: Child Poverty',
+        house: 'Lords',
+        section: 'Debate',
+        orderIndex: 3,
+      );
+
+      // The Commons day-header preamble: date heading, "met at …", Prayers.
+      const commonsHeaderSpeeches = [
+        Speech(
+          id: 'h1',
+          debateId: 'hoc',
+          debateTitle: 'House of Commons',
+          rootDebateId: 'hoc',
+          hrsTag: 'hs_date',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'Wednesday 15 July 2026',
+          orderIndex: 0,
+        ),
+        Speech(
+          id: 'h2',
+          debateId: 'hoc',
+          debateTitle: 'House of Commons',
+          rootDebateId: 'hoc',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'The House met at half-past Eleven o’clock',
+          orderIndex: 1,
+        ),
+        Speech(
+          id: 'h3',
+          debateId: 'hoc',
+          debateTitle: 'House of Commons',
+          rootDebateId: 'hoc',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'Prayers',
+          orderIndex: 2,
+        ),
+      ];
+
+      // A topical question nested under Oral Answers: its own debateId is
+      // not a root, but rootDebateId records where it belongs.
+      const prideInPlace = Speech(
+        id: 'q1',
+        debateId: 'sub-pride',
+        debateTitle: 'Pride in Place',
+        rootDebateId: 'oral',
+        memberId: 1,
+        memberName: 'Alice',
+        attributedTo: 'Alice (Lab)',
+        speechText: 'What steps he is taking to support local communities.',
+        orderIndex: 3,
+      );
+
+      test(
+          'a preamble-only venue root becomes a session with the met-at '
+          'time and is dropped from the cards', () async {
+        fakeService.debatesForDateBuilder = (_) => [commonsHeader, oralAnswers];
+        fakeService.speechesForDateBuilder =
+            (_) => [...commonsHeaderSpeeches, prideInPlace];
+
+        final result = await vm.loadDebateFeedWithStatus(day, isToday: false);
+
+        expect(
+          result.items.map((i) => i.title),
+          ['Oral Answers to Questions'],
+        );
+        expect(result.sessions, hasLength(1));
+        expect(result.sessions.single.house, 'Commons');
+        expect(result.sessions.single.startTime, '11:30');
+      });
+
+      test('orphan sub-debate speeches roll up to their recorded root',
+          () async {
+        fakeService.debatesForDateBuilder = (_) => [commonsHeader, oralAnswers];
+        fakeService.speechesForDateBuilder =
+            (_) => [...commonsHeaderSpeeches, prideInPlace];
+
+        final items = await vm.loadDebateFeed(day);
+
+        final oral = items.single;
+        expect(oral.debateId, 'oral');
+        expect(oral.contributionCount, 1);
+        expect(oral.speakerCount, 1);
+      });
+
+      test('a Lords header with only a timecode yields its sitting time',
+          () async {
+        fakeService.debatesForDateBuilder = (_) => [lordsHeader, lordsQuestion];
+        fakeService.speechesForDateBuilder = (_) => const [
+              Speech(
+                id: 'l1',
+                debateId: 'hol',
+                debateTitle: 'House of Lords',
+                rootDebateId: 'hol',
+                hrsTag: 'hs_date',
+                memberName: '',
+                attributedTo: '',
+                speechText: 'Wednesday 15 July 2026',
+                orderIndex: 0,
+              ),
+              Speech(
+                id: 'l2',
+                debateId: 'hol',
+                debateTitle: 'House of Lords',
+                rootDebateId: 'hol',
+                itemType: 'Timestamp',
+                memberName: '',
+                attributedTo: '',
+                speechText: '15:00:00',
+                timecode: '15:00:00',
+                orderIndex: 1,
+              ),
+              Speech(
+                id: 'l3',
+                debateId: 'hol',
+                debateTitle: 'House of Lords',
+                rootDebateId: 'hol',
+                memberName: '',
+                attributedTo: '',
+                speechText: 'Prayers—read by the Lord Bishop of Newcastle.',
+                orderIndex: 2,
+              ),
+              Speech(
+                id: 'l4',
+                debateId: 'lq',
+                debateTitle: 'Social Security: Child Poverty',
+                rootDebateId: 'lq',
+                memberId: 2,
+                memberName: 'Baroness Example',
+                attributedTo: 'Baroness Example',
+                speechText: 'To ask His Majesty’s Government what assessment '
+                    'they have made of child poverty.',
+                orderIndex: 3,
+              ),
+            ];
+
+        final result = await vm.loadDebateFeedWithStatus(day, isToday: false);
+
+        expect(
+          result.items.map((i) => i.title),
+          ['Social Security: Child Poverty'],
+        );
+        expect(result.sessions.single.house, 'Lords');
+        expect(result.sessions.single.startTime, '15:00');
+      });
+
+      test('a venue-titled root with real direct content stays a card',
+          () async {
+        fakeService.debatesForDateBuilder = (_) => [commonsHeader];
+        fakeService.speechesForDateBuilder = (_) => [
+              ...commonsHeaderSpeeches,
+              const Speech(
+                id: 'h4',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                memberId: 3,
+                memberName: 'Bob',
+                attributedTo: 'Bob (Con)',
+                speechText: 'A real contribution made directly in this node.',
+                orderIndex: 3,
+              ),
+            ];
+
+        final result = await vm.loadDebateFeedWithStatus(day, isToday: false);
+
+        expect(result.items.map((i) => i.title), ['House of Commons']);
+        expect(result.sessions, isEmpty);
+      });
+
+      test(
+          'legacy speeches without rootDebateId inherit the most recently '
+          'seen root', () async {
+        fakeService.debatesForDateBuilder = (_) => const [
+              Debate(
+                id: 'a',
+                title: 'Debate A',
+                house: 'Commons',
+                orderIndex: 0,
+              ),
+              Debate(
+                id: 'b',
+                title: 'Debate B',
+                house: 'Commons',
+                orderIndex: 1,
+              ),
+            ];
+        fakeService.speechesForDateBuilder = (_) => const [
+              Speech(
+                id: 's1',
+                debateId: 'a',
+                debateTitle: 'Debate A',
+                memberId: 1,
+                memberName: 'Alice',
+                attributedTo: 'Alice',
+                speechText: 'From debate A.',
+                orderIndex: 0,
+              ),
+              Speech(
+                id: 's2',
+                debateId: 'b',
+                debateTitle: 'Debate B',
+                memberId: 2,
+                memberName: 'Bob',
+                attributedTo: 'Bob',
+                speechText: 'From debate B.',
+                orderIndex: 1,
+              ),
+              Speech(
+                id: 's3',
+                debateId: 'sub-of-b',
+                debateTitle: 'Sub-debate of B',
+                memberId: 3,
+                memberName: 'Cara',
+                attributedTo: 'Cara',
+                speechText: 'From a nested node under B.',
+                orderIndex: 2,
+              ),
+            ];
+
+        final items = await vm.loadDebateFeed(day);
+
+        expect(items, hasLength(2));
+        final byId = {for (final i in items) i.debateId: i};
+        expect(byId['a']!.contributionCount, 1);
+        expect(byId['b']!.contributionCount, 2);
       });
     });
   });

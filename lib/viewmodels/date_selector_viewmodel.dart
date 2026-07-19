@@ -8,6 +8,7 @@ import '../services/parliamentary_data_service.dart';
 import '../utils/member_lookup_index.dart';
 import '../utils/party_tokens.dart';
 import '../utils/speaker_identity.dart';
+import '../utils/speech_timecodes.dart';
 
 /// A party's share of the contributions in a single debate. [partyToken] is a
 /// canonical token (e.g. `'labour'`); the view maps it to a brand colour.
@@ -102,6 +103,26 @@ class DebateFeedItem {
   }
 }
 
+/// Per-venue sitting metadata for one day, harvested from Hansard's
+/// day-header nodes (the roots titled "House of Commons", "Westminster
+/// Hall", …, whose only content is the date heading, "The House met at …"
+/// and Prayers). Those nodes are excluded from the feed as cards; instead
+/// each one yields a session the view renders as a group header.
+///
+/// [house] and [section] match the corresponding [DebateFeedItem.house] /
+/// [DebateFeedItem.section] values, so the view can pair a session with the
+/// debates that took place in it.
+class SittingSession {
+  final String house;
+  final String? section;
+
+  /// Sitting start as `HH:MM` (from the "met at …" announcement or the
+  /// header's first timecode), or `null` when the header carries no time.
+  final String? startTime;
+
+  const SittingSession({required this.house, this.section, this.startTime});
+}
+
 /// Result of [DateSelectorViewModel.loadDebateFeedWithStatus]: the debate
 /// feed for a day, plus — only meaningful when [items] is empty — whether
 /// the day was a scheduled sitting day whose transcripts simply haven't been
@@ -109,12 +130,26 @@ class DebateFeedItem {
 /// (weekend/recess).
 class DebateFeedResult {
   final List<DebateFeedItem> items;
+  final List<SittingSession> sessions;
   final bool isPendingPublication;
 
   const DebateFeedResult({
     required this.items,
+    this.sessions = const <SittingSession>[],
     this.isPendingPublication = false,
   });
+}
+
+/// Internal result of feed assembly: the visible feed items plus the
+/// sitting sessions extracted from day-header roots.
+class _AssembledFeed {
+  final List<DebateFeedItem> items;
+  final List<SittingSession> sessions;
+
+  const _AssembledFeed({required this.items, required this.sessions});
+
+  static const empty =
+      _AssembledFeed(items: <DebateFeedItem>[], sessions: <SittingSession>[]);
 }
 
 /// View-model backing the date selector screen.
@@ -429,8 +464,11 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// Loads the debate feed for [day]: one [DebateFeedItem] per root debate,
   /// with a coarse duration estimated from speech word counts. Placeholder
   /// debates (whose only content is the "The House met at …" announcement)
-  /// are filtered out.
-  Future<List<DebateFeedItem>> loadDebateFeed(DateTime day) async {
+  /// and venue day-header roots are filtered out.
+  Future<List<DebateFeedItem>> loadDebateFeed(DateTime day) async =>
+      (await _loadAssembledFeed(day)).items;
+
+  Future<_AssembledFeed> _loadAssembledFeed(DateTime day) async {
     final date = _formatDate(day);
     try {
       final speechesFuture = _service.getSpeeches(date);
@@ -449,7 +487,7 @@ class DateSelectorViewModel extends ChangeNotifier {
       final lookup = members.isEmpty ? null : MemberLookupIndex(members);
       return _assembleDebateFeed(debates, speeches, lookup);
     } catch (_) {
-      return const <DebateFeedItem>[];
+      return _AssembledFeed.empty;
     }
   }
 
@@ -463,15 +501,19 @@ class DateSelectorViewModel extends ChangeNotifier {
     DateTime day, {
     required bool isToday,
   }) async {
-    final items = await loadDebateFeed(day);
-    if (items.isNotEmpty || !isToday) {
-      return DebateFeedResult(items: items);
+    final feed = await _loadAssembledFeed(day);
+    if (feed.items.isNotEmpty || !isToday) {
+      return DebateFeedResult(items: feed.items, sessions: feed.sessions);
     }
     final scheduled = await isSittingDayScheduled(day);
-    return DebateFeedResult(items: items, isPendingPublication: scheduled);
+    return DebateFeedResult(
+      items: feed.items,
+      sessions: feed.sessions,
+      isPendingPublication: scheduled,
+    );
   }
 
-  static List<DebateFeedItem> _assembleDebateFeed(
+  static _AssembledFeed _assembleDebateFeed(
     List<Debate> debates,
     List<Speech> speeches,
     MemberLookupIndex? lookup,
@@ -482,8 +524,9 @@ class DateSelectorViewModel extends ChangeNotifier {
     final orderByDebateId = {for (final d in debates) d.id: d.orderIndex};
     final sectionByDebateId = {for (final d in debates) d.id: d.section};
 
-    // Group speeches by root debate — sub-section speeches inherit the
-    // most recently seen root debate ID.
+    // Group speeches by root debate. Speeches record their root directly
+    // (Speech.rootDebateId); legacy cache rows predating that column fall
+    // back to inheriting the most recently seen root in document order.
     final wordCountsByDebateId = <String, int>{};
     final firstTimecodeByDebateId = <String, String>{};
     final hasMeaningfulSpeechByRoot = <String, bool>{};
@@ -492,41 +535,65 @@ class DateSelectorViewModel extends ChangeNotifier {
     final contributionCountByRoot = <String, int>{};
     final partyCountsByRoot = <String, Map<String, int>>{};
     final speakerStatsByRoot = <String, Map<String, _SpeakerAgg>>{};
+    // Day-header detection inputs, tracked from a root's *direct* speeches
+    // only (speech.debateId == root id) so absorbed sub-debate content can't
+    // disguise a header as a real debate or vice versa.
+    final directDayMarkerRoots = <String>{};
+    final directContentRoots = <String>{};
+    final sittingStartSecondsByRoot = <String, int>{};
+    final firstDirectTimecodeByRoot = <String, String>{};
     String? currentRoot;
     for (final speech in speeches) {
       if (rootIds.contains(speech.debateId)) {
         currentRoot = speech.debateId;
       }
-      if (currentRoot == null) continue;
+      final recordedRoot = speech.rootDebateId;
+      final root = recordedRoot != null && rootIds.contains(recordedRoot)
+          ? recordedRoot
+          : currentRoot;
+      if (root == null) continue;
       final timecode = _normalizedHansardTimecode(speech.timecode) ??
           (speech.isTimestamp
               ? _normalizedHansardTimecode(speech.speechText)
               : null);
       if (timecode != null) {
-        firstTimecodeByDebateId.putIfAbsent(currentRoot, () => timecode);
+        firstTimecodeByDebateId.putIfAbsent(root, () => timecode);
       }
-      wordCountsByDebateId[currentRoot] =
-          (wordCountsByDebateId[currentRoot] ?? 0) +
-              _wordCount(speech.speechText);
+      if (speech.debateId == root) {
+        if (speech.isDateHeading || speech.isSittingStartAnnouncement) {
+          directDayMarkerRoots.add(root);
+        }
+        if (!_isPreambleSpeech(speech)) {
+          directContentRoots.add(root);
+        }
+        final startSeconds = speech.sittingStartSeconds;
+        if (startSeconds != null) {
+          sittingStartSecondsByRoot.putIfAbsent(root, () => startSeconds);
+        }
+        if (timecode != null) {
+          firstDirectTimecodeByRoot.putIfAbsent(root, () => timecode);
+        }
+      }
+      wordCountsByDebateId[root] =
+          (wordCountsByDebateId[root] ?? 0) + _wordCount(speech.speechText);
       if (_isMeaningfulSpeech(speech)) {
-        hasMeaningfulSpeechByRoot[currentRoot] = true;
-        contributionCountByRoot[currentRoot] =
-            (contributionCountByRoot[currentRoot] ?? 0) + 1;
+        hasMeaningfulSpeechByRoot[root] = true;
+        contributionCountByRoot[root] =
+            (contributionCountByRoot[root] ?? 0) + 1;
         final speakerKey = _speakerKey(speech);
         if (speakerKey != null) {
-          (speakerKeysByRoot[currentRoot] ??= <String>{}).add(speakerKey);
+          (speakerKeysByRoot[root] ??= <String>{}).add(speakerKey);
         }
         final member = lookup != null && speech.memberId != null
             ? lookup.memberById(speech.memberId!)
             : null;
         final partyToken = _partyTokenForSpeech(speech, lookup, member: member);
         if (partyToken != null) {
-          final counts = partyCountsByRoot[currentRoot] ??= <String, int>{};
+          final counts = partyCountsByRoot[root] ??= <String, int>{};
           counts[partyToken] = (counts[partyToken] ?? 0) + 1;
         }
         if (speakerKey != null) {
-          final stats = speakerStatsByRoot[currentRoot] ??=
-              <String, _SpeakerAgg>{};
+          final stats = speakerStatsByRoot[root] ??= <String, _SpeakerAgg>{};
           final agg = stats.putIfAbsent(
             speakerKey,
             () => _SpeakerAgg(
@@ -541,6 +608,29 @@ class DateSelectorViewModel extends ChangeNotifier {
       }
     }
 
+    // A day header is a root whose direct content is nothing but the day
+    // preamble (date heading / "met at …" / Prayers / chair line). It isn't
+    // shown as a card; instead it yields a SittingSession for its venue.
+    final dayHeaderRoots = <String>{
+      for (final d in debates)
+        if (directDayMarkerRoots.contains(d.id) &&
+            !directContentRoots.contains(d.id))
+          d.id,
+    };
+
+    final sessions = <SittingSession>[
+      for (final d in debates)
+        if (dayHeaderRoots.contains(d.id))
+          SittingSession(
+            house: d.house,
+            section: d.section,
+            startTime: _sessionStartLabel(
+              sittingStartSecondsByRoot[d.id],
+              firstDirectTimecodeByRoot[d.id],
+            ),
+          ),
+    ];
+
     final placeholderRoots = <String>{
       for (final d in debates)
         if (_isPlaceholderDebate(d, hasMeaningfulSpeechByRoot[d.id] ?? false))
@@ -549,9 +639,10 @@ class DateSelectorViewModel extends ChangeNotifier {
 
     if (wordCountsByDebateId.isEmpty) {
       // No speeches yet — fall back to debate titles, still filtering out
-      // placeholders detectable from the title alone.
-      return debates
-          .where((d) => !placeholderRoots.contains(d.id))
+      // placeholders and venue day headers detectable from the title alone.
+      final items = debates
+          .where((d) =>
+              !placeholderRoots.contains(d.id) && !_isVenueTitle(d.title))
           .map((d) => DebateFeedItem(
                 debateId: d.id,
                 title: d.title,
@@ -567,10 +658,13 @@ class DateSelectorViewModel extends ChangeNotifier {
                 relatedBillTitle: detectBillTitle(d.title),
               ))
           .toList();
+      return _AssembledFeed(items: items, sessions: sessions);
     }
 
     final items = wordCountsByDebateId.entries
-        .where((entry) => !placeholderRoots.contains(entry.key))
+        .where((entry) =>
+            !placeholderRoots.contains(entry.key) &&
+            !dayHeaderRoots.contains(entry.key))
         .map(
           (entry) => DebateFeedItem(
             debateId: entry.key,
@@ -590,8 +684,53 @@ class DateSelectorViewModel extends ChangeNotifier {
         .toList()
       ..sort((a, b) => a.order.compareTo(b.order));
 
-    return items;
+    return _AssembledFeed(items: items, sessions: sessions);
   }
+
+  /// Formats a day header's sitting start as `HH:MM`, preferring the parsed
+  /// "met at …" announcement over the header's first bare timecode.
+  static String? _sessionStartLabel(
+    int? sittingStartSeconds,
+    String? firstTimecode,
+  ) {
+    final seconds = sittingStartSeconds ??
+        (firstTimecode != null ? parseTimecodeToSeconds(firstTimecode) : null);
+    if (seconds == null) return null;
+    return formatSecondsAsClockMinute(seconds);
+  }
+
+  /// Rows that make up a venue day-header node: the date heading, sitting
+  /// start announcements, bare timestamps, Prayers, and "[X in the Chair]".
+  static bool _isPreambleSpeech(Speech speech) {
+    if (speech.isDateHeading ||
+        speech.isTimestamp ||
+        speech.isSittingStartAnnouncement) {
+      return true;
+    }
+    if (speech.inChairName != null) return true;
+    final text = speech.speechText.trim().toLowerCase();
+    return text == 'prayers' ||
+        text.startsWith('prayers—') ||
+        text.startsWith('prayers -');
+  }
+
+  /// Titles Hansard gives its per-venue day-header roots. Only used by the
+  /// no-speeches fallback, where content-based header detection is impossible.
+  static const Set<String> _venueHeaderTitles = {
+    'house of commons',
+    'house of lords',
+    'westminster hall',
+    'grand committee',
+    'general committees',
+    'written statements',
+    'petition',
+    'petitions',
+    'written correction',
+    'written corrections',
+  };
+
+  static bool _isVenueTitle(String title) =>
+      _venueHeaderTitles.contains(title.trim().toLowerCase());
 
   static const int _averageWordsPerMinute = 130;
   static const int _maxDurationMinutes = 24 * 60;

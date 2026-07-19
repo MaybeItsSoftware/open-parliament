@@ -145,7 +145,7 @@ class DatabaseService {
     final path = await sittingDbPath(date);
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE debates (
@@ -161,6 +161,7 @@ class DatabaseService {
             id           TEXT    PRIMARY KEY,
             debate_id    TEXT    NOT NULL,
             debate_title TEXT,
+            root_debate_id TEXT,
             item_type    TEXT,
             hrs_tag      TEXT,
             member_id    INTEGER,
@@ -188,6 +189,13 @@ class DatabaseService {
         }
         if (oldVersion < 4) {
           await db.execute('ALTER TABLE debates ADD COLUMN section TEXT');
+        }
+        if (oldVersion < 5) {
+          // Existing rows keep a NULL root_debate_id; the data service
+          // detects that and re-fetches the day to backfill it.
+          await db.execute(
+            'ALTER TABLE speeches ADD COLUMN root_debate_id TEXT',
+          );
         }
       },
     );

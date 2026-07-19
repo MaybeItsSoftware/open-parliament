@@ -3,6 +3,15 @@ class Speech {
   final String id;
   final String debateId;
   final String debateTitle;
+
+  /// The top-level Hansard section root this speech was fetched under.
+  ///
+  /// [debateId] identifies the innermost (possibly nested) debate node, which
+  /// is often not itself a root of the day's section tree — e.g. a topical
+  /// question under "Oral Answers to Questions". This field records the root,
+  /// so speeches can be grouped per root debate without relying on document
+  /// order. `null` on rows cached before the column existed.
+  final String? rootDebateId;
   final String itemType;
   final String hrsTag;
   final int? memberId;
@@ -16,6 +25,7 @@ class Speech {
     required this.id,
     required this.debateId,
     required this.debateTitle,
+    this.rootDebateId,
     this.itemType = 'Contribution',
     this.hrsTag = '',
     this.memberId,
@@ -34,6 +44,7 @@ class Speech {
     required String debateId,
     required String debateTitle,
     required int orderIndex,
+    String? rootDebateId,
   }) {
     final itemType = _asString(json['ItemType']) ??
         _asString(json['itemType']) ??
@@ -62,6 +73,7 @@ class Speech {
           '${debateId}_$orderIndex',
       debateId: debateId,
       debateTitle: debateTitle,
+      rootDebateId: rootDebateId,
       itemType: itemType,
       hrsTag: hrsTag,
       memberId: parsedMemberId,
@@ -79,6 +91,7 @@ class Speech {
       id: (row['id'] as String?) ?? '',
       debateId: (row['debate_id'] as String?) ?? '',
       debateTitle: (row['debate_title'] as String?) ?? '',
+      rootDebateId: row['root_debate_id'] as String?,
       itemType: (row['item_type'] as String?) ?? 'Contribution',
       hrsTag: (row['hrs_tag'] as String?) ?? '',
       memberId: row['member_id'] as int?,
@@ -95,6 +108,7 @@ class Speech {
         'id': id,
         'debate_id': debateId,
         'debate_title': debateTitle,
+        'root_debate_id': rootDebateId,
         'item_type': itemType,
         'hrs_tag': hrsTag,
         'member_id': memberId,

@@ -446,9 +446,9 @@ class TranscriptViewModel extends ChangeNotifier {
 
   /// Filters [speeches] (in order) to only those belonging to [rootDebateId].
   ///
-  /// Speeches are assigned to root debates by walking in order and tracking
-  /// which root debate was most recently seen — sub-section speeches (whose
-  /// debateId is not in [rootIds]) inherit the previous root debate.
+  /// Speeches record their root directly ([Speech.rootDebateId]); legacy
+  /// cache rows predating that column fall back to inheriting the most
+  /// recently seen root debate in document order.
   static List<Speech> _speechesForRootDebate(
     List<Speech> speeches,
     Set<String> rootIds,
@@ -460,7 +460,11 @@ class TranscriptViewModel extends ChangeNotifier {
       if (rootIds.contains(speech.debateId)) {
         currentRoot = speech.debateId;
       }
-      if (currentRoot == rootDebateId) {
+      final recorded = speech.rootDebateId;
+      final root = recorded != null && rootIds.contains(recorded)
+          ? recorded
+          : currentRoot;
+      if (root == rootDebateId) {
         result.add(speech);
       }
     }
@@ -511,7 +515,11 @@ class TranscriptViewModel extends ChangeNotifier {
       if (rootIds.contains(speech.debateId)) {
         currentRoot = speech.debateId;
       }
-      final section = sectionByDebateId[currentRoot ?? speech.debateId];
+      final root = speech.rootDebateId != null &&
+              rootIds.contains(speech.rootDebateId)
+          ? speech.rootDebateId
+          : currentRoot;
+      final section = sectionByDebateId[root ?? speech.debateId];
       if (section != null && section.trim().isNotEmpty) {
         sectionCounts[section] = (sectionCounts[section] ?? 0) + 1;
       }

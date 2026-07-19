@@ -307,6 +307,88 @@ void main() {
   );
 
   testWidgets(
+    'the "All" filter mixes every chamber into one list with no venue '
+    'headers, and day headers never render as cards',
+    (tester) async {
+      final fakeService = _FakeServiceWithTwoHouses();
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: ThemeService()),
+            Provider<ParliamentaryDataService>.value(value: fakeService),
+          ],
+          child: const MaterialApp(
+            home: DateSelectorView(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // "All" shows debates from every chamber in one flat list, so there
+      // are no per-venue group headers or sitting-time labels.
+      expect(find.text('House of Commons'), findsNothing);
+      expect(find.text('House of Lords'), findsNothing);
+      expect(find.text('Sat from 11:30'), findsNothing);
+      expect(find.text('Sat from 15:00'), findsNothing);
+
+      // The real debates still render as cards…
+      expect(find.text('Oral Answers to Questions'), findsOneWidget);
+      expect(find.text('Social Security: Child Poverty'), findsOneWidget);
+      // …while the preamble-only day-header roots contribute no card
+      // content of their own.
+      expect(find.text('Prayers'), findsNothing);
+
+      // Filtering to a single chamber still groups its debates under a
+      // venue header carrying its sitting start time, since a chamber filter
+      // can still span more than one venue (e.g. Commons + Westminster Hall).
+      await tester.tap(find.text('Commons'));
+      await tester.pumpAndSettle();
+      expect(find.text('House of Commons'), findsOneWidget);
+      expect(find.text('Sat from 11:30'), findsOneWidget);
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'the "All" filter puts written statements and petitions in their own '
+    '"Papers" section, separate from debates',
+    (tester) async {
+      final fakeService = _FakeServiceWithPapers();
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: ThemeService()),
+            Provider<ParliamentaryDataService>.value(value: fakeService),
+          ],
+          child: const MaterialApp(
+            home: DateSelectorView(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Papers'), findsOneWidget);
+      expect(find.text('Written Statements'), findsOneWidget);
+      expect(find.text('Petitions'), findsOneWidget);
+      expect(find.text('Oral Answers to Questions'), findsOneWidget);
+      expect(find.text('Rural Broadband Rollout'), findsOneWidget);
+      expect(
+        find.text('Animal Welfare (Import of Dogs, Cats and Ferrets) Bill'),
+        findsOneWidget,
+      );
+
+      // The "Papers" section sits below the debate, not mixed in above it.
+      final papersHeaderY = tester.getTopLeft(find.text('Papers')).dy;
+      final debateCardY =
+          tester.getTopLeft(find.text('Oral Answers to Questions')).dy;
+      expect(papersHeaderY, greaterThan(debateCardY));
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'debate card dynamically limits top speakers to prevent clipping',
     (tester) async {
       addTearDown(tester.view.resetPhysicalSize);
@@ -337,6 +419,142 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+}
+
+/// Serves a two-house day shaped like real Hansard data: each house opens
+/// with a venue day-header root (date heading, "met at …" / timecode,
+/// Prayers) followed by one real debate.
+class _FakeServiceWithTwoHouses extends _FakeParliamentaryDataService {
+  @override
+  Future<List<Debate>> getDebatesForDate(String date) async => const [
+        Debate(
+          id: 'hoc',
+          title: 'House of Commons',
+          house: 'Commons',
+          section: 'Debate',
+          orderIndex: 0,
+        ),
+        Debate(
+          id: 'oral',
+          title: 'Oral Answers to Questions',
+          house: 'Commons',
+          section: 'Debate',
+          orderIndex: 1,
+        ),
+        Debate(
+          id: 'hol',
+          title: 'House of Lords',
+          house: 'Lords',
+          section: 'Debate',
+          orderIndex: 2,
+        ),
+        Debate(
+          id: 'lq',
+          title: 'Social Security: Child Poverty',
+          house: 'Lords',
+          section: 'Debate',
+          orderIndex: 3,
+        ),
+      ];
+
+  @override
+  Future<List<Speech>> getSpeeches(String date) async => const [
+        Speech(
+          id: 'h1',
+          debateId: 'hoc',
+          debateTitle: 'House of Commons',
+          rootDebateId: 'hoc',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'The House met at half-past Eleven o’clock',
+          orderIndex: 0,
+        ),
+        Speech(
+          id: 'h2',
+          debateId: 'hoc',
+          debateTitle: 'House of Commons',
+          rootDebateId: 'hoc',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'Prayers',
+          orderIndex: 1,
+        ),
+        Speech(
+          id: 'c1',
+          debateId: 'oral',
+          debateTitle: 'Oral Answers to Questions',
+          rootDebateId: 'oral',
+          memberId: 1,
+          memberName: 'Alice',
+          attributedTo: 'Alice (Lab)',
+          speechText: 'A real Commons contribution.',
+          orderIndex: 2,
+        ),
+        Speech(
+          id: 'l1',
+          debateId: 'hol',
+          debateTitle: 'House of Lords',
+          rootDebateId: 'hol',
+          hrsTag: 'hs_date',
+          memberName: '',
+          attributedTo: '',
+          speechText: 'Wednesday 15 July 2026',
+          orderIndex: 3,
+        ),
+        Speech(
+          id: 'l2',
+          debateId: 'hol',
+          debateTitle: 'House of Lords',
+          rootDebateId: 'hol',
+          itemType: 'Timestamp',
+          memberName: '',
+          attributedTo: '',
+          speechText: '15:00:00',
+          timecode: '15:00:00',
+          orderIndex: 4,
+        ),
+        Speech(
+          id: 'l3',
+          debateId: 'lq',
+          debateTitle: 'Social Security: Child Poverty',
+          rootDebateId: 'lq',
+          memberId: 2,
+          memberName: 'Baroness Example',
+          attributedTo: 'Baroness Example',
+          speechText: 'A real Lords contribution.',
+          orderIndex: 5,
+        ),
+      ];
+}
+
+/// Serves a day with one real debate plus one written statement and one
+/// petition, so the "All" filter's Papers section can be exercised without
+/// needing any speeches (paper business has no meaningful spoken content).
+class _FakeServiceWithPapers extends _FakeParliamentaryDataService {
+  @override
+  Future<List<Debate>> getDebatesForDate(String date) async => const [
+        Debate(
+          id: 'oral',
+          title: 'Oral Answers to Questions',
+          house: 'Commons',
+          section: 'Debate',
+          orderIndex: 0,
+        ),
+        Debate(
+          id: 'wms1',
+          title: 'Rural Broadband Rollout',
+          house: 'Commons',
+          section: 'wms',
+          orderIndex: 1,
+        ),
+        Debate(
+          id: 'pet1',
+          title: 'Animal Welfare (Import of Dogs, Cats and Ferrets) Bill',
+          house: 'Commons',
+          section: 'Petitions',
+          orderIndex: 2,
+        ),
+      ];
 }
 
 class _FakeServiceWithSpeakers extends _FakeParliamentaryDataService {

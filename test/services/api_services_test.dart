@@ -370,10 +370,36 @@ void main() {
       expect(speeches[0].id, 'item-1');
       expect(speeches[0].debateId, 'abc');
       expect(speeches[0].debateTitle, 'PMQs');
+      // Every speech records the root debate the fetch was made for, even
+      // when its own debateId is a nested child node.
+      expect(speeches[0].rootDebateId, 'abc');
       expect(speeches[0].memberId, 172);
       expect(speeches[0].memberName, 'Adam Smith');
       expect(speeches[0].speechText, isNot(contains('<p>')));
       expect(speeches[0].speechText, contains('I thank the Minister.'));
+    });
+
+    test('fetchDebateSpeeches offsets order indexes by startOrderIndex',
+        () async {
+      final stub = _StubHttpClient([
+        _jsonResponse({
+          'Overview': {'ExtId': 'abc', 'Title': 'PMQs'},
+          'Items': [
+            {'ItemId': 'item-1', 'AttributedTo': 'A', 'Value': 'First.'},
+            {'ItemId': 'item-2', 'AttributedTo': 'B', 'Value': 'Second.'},
+          ],
+          'ChildDebates': [],
+        }),
+      ]);
+
+      final service = HansardApiService(client: stub);
+      final speeches = await service.fetchDebateSpeeches(
+        'abc',
+        'PMQs',
+        startOrderIndex: 100,
+      );
+
+      expect(speeches.map((s) => s.orderIndex), [100, 101]);
     });
 
     test('fetchDebateSpeeches returns empty list on 404', () async {

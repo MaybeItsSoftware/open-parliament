@@ -25,6 +25,11 @@ import '../utils/dc_match.dart';
 /// `isLoading` state spinning forever instead of surfacing an error.
 const Duration _defaultHttpTimeout = Duration(seconds: 20);
 
+/// How long a fetched bill's detail record is considered fresh. Bill detail
+/// (title, current stage, sponsors) only changes when the bill progresses a
+/// stage, so this can be much longer than the recent-bills list TTL.
+const Duration _billDetailCacheTtl = Duration(hours: 6);
+
 /// Adds a bounded-time `get` to [http.Client] so every call site below gets
 /// the same timeout without repeating `.timeout(...)` everywhere.
 extension _TimedHttpGet on http.Client {
@@ -421,10 +426,16 @@ class HansardApiService {
   }
 
   /// Fetches all speeches for a single debate identified by [debateId].
+  ///
+  /// Every returned speech carries [debateId] as its `rootDebateId`, so
+  /// speeches of nested sub-debates can be grouped back to their root.
+  /// [startOrderIndex] offsets the running order index so a whole day's
+  /// speeches (fetched root by root) get a single global ordering.
   Future<List<Speech>> fetchDebateSpeeches(
     String debateId,
-    String debateTitle,
-  ) async {
+    String debateTitle, {
+    int startOrderIndex = 0,
+  }) async {
     final uri = Uri.parse('$_baseUrl/debates/debate/$debateId.json');
     final response = await _client.getTimed(
       uri,
@@ -442,7 +453,7 @@ class HansardApiService {
 
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     final speeches = <Speech>[];
-    int orderIndex = 0;
+    int orderIndex = startOrderIndex;
 
     void collectFromNode(
       Map<String, dynamic> node, {
@@ -465,6 +476,7 @@ class HansardApiService {
           item,
           debateId: nodeDebateId,
           debateTitle: nodeDebateTitle,
+          rootDebateId: debateId,
           orderIndex: orderIndex++,
         );
         // Ignore structural markers (e.g. empty column-number spans).
@@ -858,6 +870,8 @@ class BillsApiService {
 
   final http.Client _client;
   final Map<String, int?> _cache = {};
+  final Map<int, Map<String, dynamic>> _billDetailCache = {};
+  final Map<int, DateTime> _billDetailCachedAt = {};
   List<Map<String, dynamic>>? _billTypesCache;
 
   BillsApiService({http.Client? client}) : _client = client ?? http.Client();
@@ -976,7 +990,19 @@ class BillsApiService {
   }
 
   /// Fetches full detail for the bill identified by [id], or `null` on failure.
+  /// Cached for [_billDetailCacheTtl] since a bill's own record changes
+  /// infrequently and is often re-requested (list views, detail page).
   Future<Map<String, dynamic>?> fetchBillDetail(int id) async {
+    final cached = _billDetailCache[id];
+    final cachedAt = _billDetailCachedAt[id];
+    if (cached != null &&
+        cachedAt != null &&
+        DateTime.now().toUtc().difference(cachedAt) < _billDetailCacheTtl) {
+      // Defensive copy: callers (e.g. fetchComingUpBills) mutate the
+      // returned map, which must not corrupt the cached entry.
+      return Map<String, dynamic>.from(cached);
+    }
+
     final uri = Uri.parse('$_baseUrl/$id');
     try {
       final response = await _client.getTimed(
@@ -985,7 +1011,10 @@ class BillsApiService {
       );
       if (response.statusCode != 200) return null;
       final body = json.decode(response.body);
-      return body is Map<String, dynamic> ? body : null;
+      if (body is! Map<String, dynamic>) return null;
+      _billDetailCache[id] = body;
+      _billDetailCachedAt[id] = DateTime.now().toUtc();
+      return Map<String, dynamic>.from(body);
     } catch (e, st) {
       _reportSilentFailure(e, st);
       return null;
