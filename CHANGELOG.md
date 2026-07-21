@@ -1,3 +1,20 @@
+# [0.7.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.6.0...v0.7.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **calendar:** hide future recess days, animate banner at top of tray ([8d08ad1](https://github.com/MaybeItsSoftware/open-parliament/commit/8d08ad1691ea6cf75feafb06567cff7da52393ff))
+* **env:** don't crash flutter run/test when .env is missing ([da99a17](https://github.com/MaybeItsSoftware/open-parliament/commit/da99a17d4047e54160dac234750e01a2d26c0f95))
+
+
+### Features
+
+* **feed:** split papers tab, resolve generic titles, and parse ISO timecodes ([c5e5719](https://github.com/MaybeItsSoftware/open-parliament/commit/c5e57196600e47ba93fa1a40d28771ef5c9bd417))
+* **home:** group debates by sitting session and add chamber filter ([fbfec1a](https://github.com/MaybeItsSoftware/open-parliament/commit/fbfec1a523b3884585c28849b430d4806458f7e6))
+* **home:** show pending publication state for today's scheduled debates ([b5e52fa](https://github.com/MaybeItsSoftware/open-parliament/commit/b5e52fa3a08a40ecce86ed84d642fd891a883ea0))
+* **map:** add search bar to constituency map and wire up search results ([5e4d496](https://github.com/MaybeItsSoftware/open-parliament/commit/5e4d496bf3d67c37c4bca5315bbf4a9005fb34c2))
+* redesign chamber seating layout and enhance UI layouts ([7b1269c](https://github.com/MaybeItsSoftware/open-parliament/commit/7b1269cfd695d230b54b8eb8cf1965b3c426bbf1))
+
 # [0.6.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.5.2...v0.6.0) (2026-07-18)
 
 
