@@ -93,6 +93,37 @@ void main() {
       expect(speech.isQuote, isTrue);
     });
 
+    test('isDateHeading matches the live Hansard hrsTag variant', () {
+      final json = {
+        'ItemId': 'item-003d',
+        'HRSTag': 'hs_6fDate',
+        'Value': 'Wednesday 15 July 2026',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 2,
+      );
+      expect(speech.isDateHeading, isTrue);
+    });
+
+    test('displayTime parses a full ISO-8601 Timecode value', () {
+      final json = {
+        'ItemId': 'item-003e',
+        'MemberName': 'Adam Smith',
+        'Value': 'I thank the Minister for his answer.',
+        'Timecode': '2026-07-15T12:00:00',
+      };
+      final speech = Speech.fromApiJson(
+        json,
+        debateId: debateId,
+        debateTitle: debateTitle,
+        orderIndex: 2,
+      );
+      expect(speech.displayTime, '12:00');
+    });
+
     test('fromApiJson generates id from debateId + orderIndex when absent', () {
       final json = {'Value': 'Some text'};
       final speech = Speech.fromApiJson(

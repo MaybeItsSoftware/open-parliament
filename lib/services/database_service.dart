@@ -15,13 +15,13 @@ class DatabaseService {
 
   /// Returns the absolute path to the members database file.
   Future<String> membersDbPath() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     return p.join(dir.path, _membersDbName);
   }
 
   /// Returns the absolute path to the sitting database for [date] (YYYY-MM-DD).
   Future<String> sittingDbPath(String date) async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     return p.join(dir.path, 'sitting_$date.db');
   }
 
@@ -88,11 +88,11 @@ class DatabaseService {
     );
   }
 
-  /// Deletes all `sitting_*.db` files from the documents directory.
+  /// Deletes all `sitting_*.db` files from the application support directory.
   ///
   /// Returns the number of files deleted.
   Future<int> wipeDebateCache() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     int count = 0;
     await for (final entity in dir.list()) {
       if (entity is File &&
@@ -117,7 +117,7 @@ class DatabaseService {
 
   /// Lists cached sitting dates (YYYY-MM-DD) for every local sitting database.
   Future<List<String>> cachedSittingDates() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final dates = <String>[];
     final pattern = RegExp(r'^sitting_(\d{4}-\d{2}-\d{2})\.db$');
     await for (final entity in dir.list()) {

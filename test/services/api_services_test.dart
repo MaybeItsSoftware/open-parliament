@@ -321,6 +321,102 @@ void main() {
       expect(debates[0].house, 'Commons');
     });
 
+    test(
+        'fetchSittingDebates renames a PMQs-shaped Oral Answers to Questions '
+        'root using its single "Prime Minister" department child', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse(['Debate']),
+        _jsonResponse([
+          {
+            'Title': 'Commons Chamber',
+            'SectionTreeItems': [
+              {'Id': 1, 'ParentId': null, 'Title': 'Commons Chamber'},
+              {
+                'Id': 2,
+                'ParentId': 1,
+                'ExternalId': 'oaq-pmqs',
+                'Title': 'Oral Answers to Questions',
+              },
+              {'Id': 3, 'ParentId': 2, 'Title': 'Prime Minister'},
+              {'Id': 4, 'ParentId': 3, 'Title': 'Engagements'},
+            ],
+          },
+        ]),
+        _jsonResponse([]),
+      ]);
+
+      final service = HansardApiService(client: stub);
+      final debates = await service.fetchSittingDebates('2026-07-15');
+
+      expect(debates, hasLength(1));
+      expect(debates[0].id, 'oaq-pmqs');
+      expect(debates[0].title, "Prime Minister's Questions");
+    });
+
+    test(
+        'fetchSittingDebates renames a generic Oral Answers to Questions root '
+        'using its single department child', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse(['Debate']),
+        _jsonResponse([
+          {
+            'Title': 'Commons Chamber',
+            'SectionTreeItems': [
+              {'Id': 1, 'ParentId': null, 'Title': 'Commons Chamber'},
+              {
+                'Id': 2,
+                'ParentId': 1,
+                'ExternalId': 'oaq-scotland',
+                'Title': 'Oral Answers to Questions',
+              },
+              {'Id': 3, 'ParentId': 2, 'Title': 'Scotland'},
+              {'Id': 4, 'ParentId': 3, 'Title': 'Pride in Place'},
+              {'Id': 5, 'ParentId': 3, 'Title': 'Defence Skills: Fife'},
+            ],
+          },
+        ]),
+        _jsonResponse([]),
+      ]);
+
+      final service = HansardApiService(client: stub);
+      final debates = await service.fetchSittingDebates('2026-07-15');
+
+      expect(debates, hasLength(1));
+      expect(debates[0].id, 'oaq-scotland');
+      expect(debates[0].title, 'Departmental Questions: Scotland');
+    });
+
+    test(
+        'fetchSittingDebates leaves an Oral Answers to Questions root '
+        'untouched when it has more than one department child', () async {
+      final stub = _StubHttpClient([
+        _jsonResponse(['Debate']),
+        _jsonResponse([
+          {
+            'Title': 'Commons Chamber',
+            'SectionTreeItems': [
+              {'Id': 1, 'ParentId': null, 'Title': 'Commons Chamber'},
+              {
+                'Id': 2,
+                'ParentId': 1,
+                'ExternalId': 'oaq-ambiguous',
+                'Title': 'Oral Answers to Questions',
+              },
+              {'Id': 3, 'ParentId': 2, 'Title': 'Health'},
+              {'Id': 4, 'ParentId': 2, 'Title': 'Social Care'},
+            ],
+          },
+        ]),
+        _jsonResponse([]),
+      ]);
+
+      final service = HansardApiService(client: stub);
+      final debates = await service.fetchSittingDebates('2026-07-15');
+
+      expect(debates, hasLength(1));
+      expect(debates[0].title, 'Oral Answers to Questions');
+    });
+
     test('fetchSittingDebates returns empty list on 404', () async {
       final stub = _StubHttpClient([http.Response('', 404)]);
       final service = HansardApiService(client: stub);

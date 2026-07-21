@@ -702,13 +702,16 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// Rows that make up a venue day-header node: the date heading, sitting
   /// start announcements, bare timestamps, Prayers, and "[X in the Chair]".
   static bool _isPreambleSpeech(Speech speech) {
+    final text = speech.speechText.trim().toLowerCase();
+    // A stray formatting-only item (e.g. a bare column-number marker) strips
+    // down to nothing and can never be real content, regardless of hrsTag.
+    if (text.isEmpty) return true;
     if (speech.isDateHeading ||
         speech.isTimestamp ||
         speech.isSittingStartAnnouncement) {
       return true;
     }
     if (speech.inChairName != null) return true;
-    final text = speech.speechText.trim().toLowerCase();
     return text == 'prayers' ||
         text.startsWith('prayers—') ||
         text.startsWith('prayers -');
@@ -846,15 +849,8 @@ class DateSelectorViewModel extends ChangeNotifier {
 
   static String? _normalizedHansardTimecode(String? value) {
     if (value == null) return null;
-    final parts = value.trim().split(':');
-    if (parts.length < 2 || parts.length > 3) return null;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    final s = parts.length == 3 ? int.tryParse(parts[2]) : 0;
-    if (h == null || m == null || s == null) return null;
-    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
-    return '${h.toString().padLeft(2, '0')}:'
-        '${m.toString().padLeft(2, '0')}:'
-        '${s.toString().padLeft(2, '0')}';
+    final seconds = parseTimecodeToSeconds(value);
+    if (seconds == null) return null;
+    return formatSecondsAsTimecode(seconds);
   }
 }

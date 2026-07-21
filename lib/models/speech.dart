@@ -1,3 +1,5 @@
+import '../utils/speech_timecodes.dart';
+
 /// A single speech contribution made by a Member during a Parliamentary sitting.
 class Speech {
   final String id;
@@ -191,7 +193,7 @@ class Speech {
     return !hasNamedSpeaker && _isClockTime(speechText);
   }
 
-  bool get isDateHeading => hrsTag.toLowerCase() == 'hs_date';
+  bool get isDateHeading => hrsTag.toLowerCase().contains('date');
   bool get isQuote => hrsTag.toLowerCase() == 'hs_quote';
   bool get isTabledBy => hrsTag.toLowerCase() == 'hs_tabledby';
   bool get isProcedureOutcome => hrsTag.toLowerCase() == 'hs_procedure';
@@ -314,10 +316,11 @@ class Speech {
 
   String? get displayTime {
     final source = (timecode ?? speechText).trim();
-    if (!_isClockTime(source)) return null;
-    final parts = source.split(':');
-    if (parts.length < 2) return source;
-    return '${parts[0]}:${parts[1]}';
+    final seconds = parseTimecodeToSeconds(source);
+    if (seconds == null) return null;
+    final h = (seconds ~/ 3600).toString().padLeft(2, '0');
+    final m = ((seconds % 3600) ~/ 60).toString().padLeft(2, '0');
+    return '$h:$m';
   }
 
   /// Strips basic HTML tags and decodes common HTML entities to plain text.

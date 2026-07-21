@@ -15,7 +15,7 @@ import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'transcript_view.dart';
 
-enum _ChamberFilter { all, commons, lords, committees }
+enum _ChamberFilter { all, commons, lords, committees, papers }
 
 /// Categorises a [DebateFeedItem.house] value the same way [_houseAccentColor]
 /// does, so the chamber toggle and the card accent colours always agree.
@@ -299,12 +299,14 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         }
 
         final filteredItems =
-            _chamberFilter == _ChamberFilter.all
-                ? items
+            _chamberFilter == _ChamberFilter.papers
+                ? items.where((i) => _isPaperSection(i.house, i.section)).toList()
                 : items
                     .where(
                       (i) =>
-                          _chamberCategoryForHouse(i.house) == _chamberFilter,
+                          !_isPaperSection(i.house, i.section) &&
+                          (_chamberFilter == _ChamberFilter.all ||
+                              _chamberCategoryForHouse(i.house) == _chamberFilter),
                     )
                     .toList();
         if (filteredItems.isEmpty) {
@@ -392,19 +394,10 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
   /// Builds the "All" filter's rows: every debate in chronological order
   /// (by first spoken timecode, falling back to feed order for items with no
-  /// timecode), followed by a single "Papers" section for written
-  /// statements, petitions, and written corrections — none of which have a
-  /// meaningful spoken start time.
+  /// timecode). Under the new tab system, paper items are filtered out before
+  /// reaching this point, so items contains only spoken debates.
   List<Widget> _buildAllFeedRows(List<DebateFeedItem> items, DateTime day) {
-    final debateItems = <DebateFeedItem>[];
-    final paperItems = <DebateFeedItem>[];
-    for (final item in items) {
-      if (_isPaperSection(item.house, item.section)) {
-        paperItems.add(item);
-      } else {
-        debateItems.add(item);
-      }
-    }
+    final debateItems = List<DebateFeedItem>.from(items);
 
     debateItems.sort((a, b) {
       final aSeconds = _startSeconds(a);
@@ -420,53 +413,10 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       return a.order.compareTo(b.order);
     });
 
-    final rows = <Widget>[
+    return <Widget>[
       for (final item in debateItems)
         _buildDebateCardRow(item, day, showVenue: true),
     ];
-
-    if (paperItems.isNotEmpty) {
-      paperItems.sort((a, b) => a.order.compareTo(b.order));
-      final itemsByGroup = <String, List<DebateFeedItem>>{};
-      final rankByGroup = <String, int>{};
-      for (final item in paperItems) {
-        final group = _feedGroupFor(item.house, item.section);
-        itemsByGroup.putIfAbsent(group.name, () => []).add(item);
-        rankByGroup[group.name] = group.rank;
-      }
-      final groupNames = itemsByGroup.keys.toList()
-        ..sort((a, b) => rankByGroup[a]!.compareTo(rankByGroup[b]!));
-
-      rows.add(
-        Padding(
-          padding: EdgeInsets.only(top: rows.isEmpty ? 0 : 20, bottom: 8),
-          child: Text(
-            'Papers',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-        ),
-      );
-      for (var i = 0; i < groupNames.length; i++) {
-        final name = groupNames[i];
-        final groupItems = itemsByGroup[name]!;
-        rows.add(
-          Padding(
-            padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8),
-            child: _FeedGroupHeader(
-              name: name,
-              accent: _houseAccentColor(groupItems.first.house),
-            ),
-          ),
-        );
-        for (final item in groupItems) {
-          rows.add(_buildDebateCardRow(item, day));
-        }
-      }
-    }
-
-    return rows;
   }
 
   /// The item's first spoken timecode as seconds since midnight, or `null`
@@ -486,10 +436,18 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       padding: const EdgeInsets.only(bottom: 10),
       child: SizedBox(
         height: _debateCardHeight(item.durationMinutes),
-        child: _HouseAccentCard(
-          house: item.house,
-          onTap: () => _navigateToTranscript(day, debateId: item.debateId),
-          child: _DebateCardContent(item: item, showVenue: showVenue),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _DebateTimeMark(startTimecode: item.startTimecode),
+            Expanded(
+              child: _HouseAccentCard(
+                house: item.house,
+                onTap: () => _navigateToTranscript(day, debateId: item.debateId),
+                child: _DebateCardContent(item: item, showVenue: showVenue),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -562,32 +520,45 @@ class _DateSelectorViewState extends State<DateSelectorView> {
 
   Widget _buildChamberToggle() {
     final theme = Theme.of(context);
-    return SegmentedButton<_ChamberFilter>(
-      segments: const [
-        ButtonSegment(value: _ChamberFilter.all, label: Text('All')),
-        ButtonSegment(value: _ChamberFilter.commons, label: Text('Commons')),
-        ButtonSegment(value: _ChamberFilter.lords, label: Text('Lords')),
-        ButtonSegment(
-          value: _ChamberFilter.committees,
-          label: Text('Committees'),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SegmentedButton<_ChamberFilter>(
+        segments: const [
+          ButtonSegment(value: _ChamberFilter.all, label: Text('All')),
+          ButtonSegment(value: _ChamberFilter.commons, label: Text('Commons')),
+          ButtonSegment(value: _ChamberFilter.lords, label: Text('Lords')),
+          ButtonSegment(
+            value: _ChamberFilter.committees,
+            label: Text('Committees'),
+          ),
+          ButtonSegment(
+            value: _ChamberFilter.papers,
+            label: Text('Papers'),
+          ),
+        ],
+        selected: {_chamberFilter},
+        onSelectionChanged: (selection) {
+          if (selection.isNotEmpty) {
+            setState(() => _chamberFilter = selection.first);
+          }
+        },
+        showSelectedIcon: false,
+        style: SegmentedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          selectedBackgroundColor: theme.colorScheme.primary,
+          selectedForegroundColor: theme.colorScheme.onPrimary,
         ),
-      ],
-      selected: {_chamberFilter},
-      onSelectionChanged: (selection) {
-        if (selection.isNotEmpty) {
-          setState(() => _chamberFilter = selection.first);
-        }
-      },
-      showSelectedIcon: false,
-      style: SegmentedButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        selectedBackgroundColor: theme.colorScheme.primary,
-        selectedForegroundColor: theme.colorScheme.onPrimary,
       ),
     );
   }
 
   Widget _buildNoChamberDebatesCard(_ChamberFilter filter) {
+    final String message;
+    if (filter == _ChamberFilter.papers) {
+      message = 'No papers for this sitting day.';
+    } else {
+      message = 'No ${_chamberFilterLabel(filter)} debates for this sitting day.';
+    }
     return Center(
       child: Card(
         child: Padding(
@@ -596,7 +567,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'No ${_chamberFilterLabel(filter)} debates for this sitting day.',
+                message,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
@@ -620,6 +591,8 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         return 'Lords';
       case _ChamberFilter.committees:
         return 'Committee';
+      case _ChamberFilter.papers:
+        return 'Papers';
       case _ChamberFilter.all:
         return '';
     }
@@ -844,10 +817,6 @@ class _DebateCardContent extends StatelessWidget {
         '${item.contributionCount} '
         '${item.contributionCount == 1 ? 'contribution' : 'contributions'}',
       );
-    }
-    final start = item.startTimecode;
-    if (start != null && start.length >= 5) {
-      segments.add(start.substring(0, 5));
     }
     return segments;
   }
@@ -1422,6 +1391,51 @@ class _FeedGroupHeader extends StatelessWidget {
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// A small, discrete start-time mark shown in the day view's left gutter,
+/// next to (not inside) its debate card. Renders nothing when the debate has
+/// no known start timecode, collapsing to zero width.
+class _DebateTimeMark extends StatelessWidget {
+  final String? startTimecode;
+
+  const _DebateTimeMark({required this.startTimecode});
+
+  static const double _width = 44;
+
+  @override
+  Widget build(BuildContext context) {
+    final start = startTimecode;
+    final label =
+        (start != null && start.length >= 5) ? start.substring(0, 5) : null;
+    if (label == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: _width,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 10, right: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Container(
+              width: 10,
+              height: 1.5,
+              color: theme.colorScheme.outlineVariant,
+            ),
+          ],
+        ),
       ),
     );
   }

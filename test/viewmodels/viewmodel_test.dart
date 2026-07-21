@@ -1039,6 +1039,119 @@ void main() {
         expect(result.sessions.single.startTime, '11:30');
       });
 
+      test(
+          'a preamble-only venue root is still dropped from cards when it '
+          'carries the real Hansard tag/content edge cases (hs_6fDate tag, '
+          'an empty column-number stub item)', () async {
+        fakeService.debatesForDateBuilder = (_) => [commonsHeader, oralAnswers];
+        fakeService.speechesForDateBuilder = (_) => [
+              const Speech(
+                id: 'h0',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                hrsTag: 'hs_ColumnNumber',
+                memberName: '',
+                attributedTo: '',
+                speechText: '', // stripped down to nothing, like a bare
+                // column-number marker with no real content
+                orderIndex: -1,
+              ),
+              const Speech(
+                id: 'h1b',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                hrsTag: 'hs_6fDate', // real API tag, not the exact 'hs_date'
+                memberName: '',
+                attributedTo: '',
+                speechText: 'Wednesday 15 July 2026',
+                orderIndex: 0,
+              ),
+              const Speech(
+                id: 'h2b',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                hrsTag: 'hs_6fDate',
+                memberName: '',
+                attributedTo: '',
+                speechText: 'The House met at half-past Eleven o’clock',
+                orderIndex: 1,
+              ),
+              const Speech(
+                id: 'h3b',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                hrsTag: 'hs_6bFormalmotion',
+                memberName: '',
+                attributedTo: '',
+                speechText: 'Prayers',
+                orderIndex: 2,
+              ),
+              const Speech(
+                id: 'h4b',
+                debateId: 'hoc',
+                debateTitle: 'House of Commons',
+                rootDebateId: 'hoc',
+                hrsTag: 'hs_76fChair',
+                memberName: '',
+                attributedTo: '',
+                speechText: '[Mr Speaker in the Chair]',
+                orderIndex: 3,
+              ),
+              prideInPlace,
+            ];
+
+        final result = await vm.loadDebateFeedWithStatus(day, isToday: false);
+
+        expect(
+          result.items.map((i) => i.title),
+          ['Oral Answers to Questions'],
+        );
+        expect(result.sessions, hasLength(1));
+        expect(result.sessions.single.house, 'Commons');
+        expect(result.sessions.single.startTime, '11:30');
+      });
+
+      test(
+          'a debate derives its start time from a real ISO-8601 Timecode '
+          'value, as returned by the live Hansard API for PMQs', () async {
+        fakeService.debatesForDateBuilder = (_) => [commonsHeader, oralAnswers];
+        fakeService.speechesForDateBuilder = (_) => [
+              ...commonsHeaderSpeeches,
+              const Speech(
+                id: 'pmq1',
+                debateId: 'oral',
+                debateTitle: 'Prime Minister',
+                rootDebateId: 'oral',
+                memberName: '',
+                attributedTo: '',
+                speechText: 'The Prime Minister was asked—',
+                orderIndex: 3,
+              ),
+              const Speech(
+                id: 'pmq2',
+                debateId: 'sub-engagements',
+                debateTitle: 'Engagements',
+                rootDebateId: 'oral',
+                memberId: 4,
+                memberName: 'Keir Starmer',
+                attributedTo: 'The Prime Minister (Keir Starmer)',
+                speechText: 'This morning I had meetings with ministerial '
+                    'colleagues.',
+                timecode: '2026-07-15T12:00:00',
+                orderIndex: 4,
+              ),
+            ];
+
+        final items = await vm.loadDebateFeed(day);
+
+        final oral = items.single;
+        expect(oral.startTimecode, '12:00:00');
+      });
+
       test('orphan sub-debate speeches roll up to their recorded root',
           () async {
         fakeService.debatesForDateBuilder = (_) => [commonsHeader, oralAnswers];

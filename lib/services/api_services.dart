@@ -405,9 +405,11 @@ class HansardApiService {
               continue;
             }
 
-            final title = (rootSection['Title'] as String?) ??
+            final rawTitle = (rootSection['Title'] as String?) ??
                 (treeItem['Title'] as String?) ??
                 section;
+            final title =
+                _resolveOralQuestionsTitle(rawTitle, treeItem, rootSection);
 
             debates.add(
               Debate(
@@ -660,6 +662,53 @@ class HansardApiService {
     if (s == 'gen') return 'General Committee';
     if (s == 'wms') return house; // Written Statements — keep house label
     return house;
+  }
+
+  /// Root titles Hansard reuses for every oral-questions session that day —
+  /// generic enough that two unrelated sessions (e.g. departmental questions
+  /// and PMQs) can carry the exact same title. See [_resolveOralQuestionsTitle].
+  static const Set<String> _genericOralQuestionsTitles = {
+    'oral answers to questions',
+    'topical questions',
+  };
+
+  /// Disambiguates a generic oral-questions root title using the section
+  /// tree's own nesting: such a root's real subject is its single
+  /// department-level child (e.g. "Scotland", "Prime Minister") — Hansard
+  /// never puts more than one department under the same root, but on
+  /// ambiguity (0 or 2+ children found) the original [rawTitle] is kept.
+  ///
+  /// PMQs is structurally identical to any other departmental questions root
+  /// (one department child) except its department is always "Prime
+  /// Minister", so it gets its own well-known name rather than "Departmental
+  /// Questions: Prime Minister".
+  String _resolveOralQuestionsTitle(
+    String rawTitle,
+    Map<String, dynamic> treeItem,
+    Map<String, dynamic> rootNode,
+  ) {
+    if (!_genericOralQuestionsTitles.contains(
+      rawTitle.trim().toLowerCase(),
+    )) {
+      return rawTitle;
+    }
+    final sectionTreeItems = treeItem['SectionTreeItems'];
+    if (sectionTreeItems is! List<dynamic>) return rawTitle;
+
+    final rootId = rootNode['Id'];
+    final children = sectionTreeItems
+        .whereType<Map<String, dynamic>>()
+        .where((item) => item['ParentId'] == rootId)
+        .toList();
+    if (children.length != 1) return rawTitle;
+
+    final departmentTitle = (children.first['Title'] as String?)?.trim();
+    if (departmentTitle == null || departmentTitle.isEmpty) return rawTitle;
+
+    if (departmentTitle.toLowerCase() == 'prime minister') {
+      return "Prime Minister's Questions";
+    }
+    return 'Departmental Questions: $departmentTitle';
   }
 
   /// Returns the top-level debate nodes from a section tree.

@@ -13,10 +13,18 @@ class TimeAnchor {
   });
 }
 
-/// Parses an `HH:MM` or `HH:MM:SS` timecode string into seconds since
-/// midnight. Returns `null` when the string is malformed or out of range.
+/// Parses an `HH:MM`/`HH:MM:SS` timecode, or a full ISO-8601 datetime (the
+/// shape the live Hansard API actually returns in its `Timecode` field, e.g.
+/// `"2026-07-15T12:00:00"`), into seconds since midnight. Returns `null` when
+/// the string is malformed or out of range.
 int? parseTimecodeToSeconds(String raw) {
-  final parts = raw.trim().split(':');
+  final trimmed = raw.trim();
+  final isoParsed = DateTime.tryParse(trimmed);
+  if (isoParsed != null && trimmed.contains('T')) {
+    return (isoParsed.hour * 3600) + (isoParsed.minute * 60) + isoParsed.second;
+  }
+
+  final parts = trimmed.split(':');
   if (parts.length < 2 || parts.length > 3) return null;
   final h = int.tryParse(parts[0]);
   final m = int.tryParse(parts[1]);

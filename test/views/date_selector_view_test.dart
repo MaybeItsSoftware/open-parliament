@@ -351,8 +351,7 @@ void main() {
   );
 
   testWidgets(
-    'the "All" filter puts written statements and petitions in their own '
-    '"Papers" section, separate from debates',
+    'papers do not appear in the "All" section and instead have their own "Papers" tab',
     (tester) async {
       final fakeService = _FakeServiceWithPapers();
       await tester.pumpWidget(
@@ -368,21 +367,35 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Papers'), findsOneWidget);
+      // Under the default "All" tab:
+      // Spoken debate is visible
+      expect(find.text('Oral Answers to Questions'), findsOneWidget);
+      // Papers are NOT visible
+      expect(find.text('Written Statements'), findsNothing);
+      expect(find.text('Petitions'), findsNothing);
+      expect(find.text('Rural Broadband Rollout'), findsNothing);
+      expect(
+        find.text('Animal Welfare (Import of Dogs, Cats and Ferrets) Bill'),
+        findsNothing,
+      );
+
+      // Tap the "Papers" tab at the top
+      final papersTab = find.text('Papers');
+      expect(papersTab, findsOneWidget);
+      await tester.tap(papersTab);
+      await tester.pumpAndSettle();
+
+      // Under the "Papers" tab:
+      // Papers are visible, grouped by their category headers
       expect(find.text('Written Statements'), findsOneWidget);
       expect(find.text('Petitions'), findsOneWidget);
-      expect(find.text('Oral Answers to Questions'), findsOneWidget);
       expect(find.text('Rural Broadband Rollout'), findsOneWidget);
       expect(
         find.text('Animal Welfare (Import of Dogs, Cats and Ferrets) Bill'),
         findsOneWidget,
       );
-
-      // The "Papers" section sits below the debate, not mixed in above it.
-      final papersHeaderY = tester.getTopLeft(find.text('Papers')).dy;
-      final debateCardY =
-          tester.getTopLeft(find.text('Oral Answers to Questions')).dy;
-      expect(papersHeaderY, greaterThan(debateCardY));
+      // Spoken debates are NOT visible
+      expect(find.text('Oral Answers to Questions'), findsNothing);
 
       expect(tester.takeException(), isNull);
     },
