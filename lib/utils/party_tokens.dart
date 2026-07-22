@@ -51,5 +51,8 @@ String? canonicalPartyToken(String value) {
   }
   if (norm == 'speaker') return 'speaker';
   if (norm == 'reform' || norm == 'reformuk' || norm == 'ref') return 'reform';
+  if (norm == 'restorebritain' || norm == 'restorebritainparty' || norm == 'rb') {
+    return 'restorebritain';
+  }
   return null;
 }
