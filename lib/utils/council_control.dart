@@ -113,6 +113,8 @@ String _partyDisplayName(String code) {
       return 'Plaid Cymru';
     case 'reform':
       return 'Reform';
+    case 'restorebritain':
+      return 'Restore Britain';
     case 'independent':
       return 'Independent';
     default:

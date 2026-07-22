@@ -24,7 +24,8 @@ Color partyColor(String partyName, {Color? fallback}) {
   if (token == 'alliance') return const Color(0xFFFFD447);
   if (token == 'crossbench' || token == 'independent') return const Color(0xFF6C757D);
   if (token == 'speaker') return Colors.black;
-  if (token == 'reform') return const Color(0xFF12B6CF);
+  if (token == 'reform') return const Color(0xFF17B9D1);
+  if (token == 'restorebritain') return const Color(0xFF051D3F);
   return fallback ?? const Color(0xFF6C757D);
 }
 
