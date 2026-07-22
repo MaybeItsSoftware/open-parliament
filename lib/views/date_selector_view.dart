@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/parliamentary_data_service.dart';
+import '../utils/day_timeline_layout.dart';
 import '../utils/house_colors.dart';
 import '../utils/party_colors.dart';
 import '../utils/speech_timecodes.dart';
@@ -16,6 +17,27 @@ import 'bill_view.dart';
 import 'transcript_view.dart';
 
 enum _ChamberFilter { all, commons, lords, committees, papers }
+
+// Tall enough that even the shortest debates (which get clamped to this
+// height) have room for a 2-line title — see _DebateCardContent, which
+// always allows 2 title lines on narrow screens regardless of card height.
+const double _minDebateCardHeight = 92;
+
+// Scale for cards whose height still comes from the word-count duration
+// estimate (used by _buildDebateCardRow, the renderer for items that
+// couldn't be placed on the real time axis at all).
+const double _pixelsPerMinute = 3.5;
+
+// Scale for cards positioned by real elapsed time (including gaps between
+// debates) on the day timeline. Tuned much lower than [_pixelsPerMinute]:
+// real elapsed span covers a full sitting day, not just summed word-count
+// minutes — an 8h sitting day at 1.5px/min is ~720px (a reasonable scroll),
+// vs. ~1680px if the word-count scale were reused for real clock time.
+const double _timelinePixelsPerMinute = 1.5;
+
+// Fixed width of the day timeline's left time gutter (both the per-card
+// _DebateTimeMark and the shared _HourRuler use this so their labels align).
+const double _timeGutterWidth = 44;
 
 /// Categorises a [DebateFeedItem.house] value the same way [_houseAccentColor]
 /// does, so the chamber toggle and the card accent colours always agree.
@@ -38,12 +60,6 @@ class DateSelectorView extends StatefulWidget {
 
 class _DateSelectorViewState extends State<DateSelectorView> {
   late DateSelectorViewModel _vm;
-
-  // Tall enough that even the shortest debates (which get clamped to this
-  // height) have room for a 2-line title — see _DebateCardContent, which
-  // always allows 2 title lines on narrow screens regardless of card height.
-  static const double _minDebateCardHeight = 92;
-  static const double _pixelsPerMinute = 3.5;
 
   /// True until [_initializeLandingDay] resolves. While `true`, the
   /// view-model's focused day is still its raw `DateTime.now()` default and
@@ -313,11 +329,11 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           return _buildNoChamberDebatesCard(_chamberFilter);
         }
 
-        final rows = _buildFeedRows(
-          filteredItems,
-          result?.sessions ?? const <SittingSession>[],
-          day,
-        );
+        final sessions = result?.sessions ?? const <SittingSession>[];
+        if (_chamberFilter == _ChamberFilter.all) {
+          return _buildAllChambersTimeline(filteredItems, sessions, day);
+        }
+        final rows = _buildGroupedFeedRows(filteredItems, sessions, day);
         return ListView.builder(
           itemCount: rows.length,
           itemBuilder: (context, index) => rows[index],
@@ -326,29 +342,176 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
-  /// Builds the feed rows for the current chamber filter. The "All" filter
-  /// shows debates in chronological order with paper business (written
-  /// statements, petitions, corrections) collected in its own section below;
-  /// single-chamber filters keep the venue-grouped layout, since a chamber
-  /// can still span more than one venue (e.g. Commons + Westminster Hall).
-  List<Widget> _buildFeedRows(
-    List<DebateFeedItem> items,
-    List<SittingSession> sessions,
-    DateTime day,
-  ) {
-    if (_chamberFilter == _ChamberFilter.all) {
-      return _buildAllFeedRows(items, day);
-    }
-    return _buildGroupedFeedRows(items, sessions, day);
-  }
-
   /// Flattens the feed into venue-grouped rows: one slim header per group
   /// (venue name + sitting start time, when the day's Hansard header node
-  /// provides one), followed by that venue's debate cards in running order.
+  /// provides one), followed by that venue's debate cards on a proportional
+  /// time axis (real durations/gaps within the venue, via
+  /// [_VenueTimelineBlock]), plus a plain trailing list for any debate whose
+  /// start couldn't be placed on the axis at all.
   List<Widget> _buildGroupedFeedRows(
     List<DebateFeedItem> items,
     List<SittingSession> sessions,
     DateTime day,
+  ) {
+    final venues = _resolveVenueTimelines(items, sessions);
+    final rows = <Widget>[];
+    for (var i = 0; i < venues.length; i++) {
+      final venue = venues[i];
+      rows.add(
+        Padding(
+          padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8),
+          child: _FeedGroupHeader(
+            name: venue.name,
+            startTime: venue.startTimeLabel,
+            accent: venue.accent,
+          ),
+        ),
+      );
+      if (venue.items.isNotEmpty) {
+        rows.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _VenueTimelineBlock(
+              items: venue.items,
+              spans: venue.spans,
+              onTapDebate:
+                  (debateId) => _navigateToTranscript(day, debateId: debateId),
+            ),
+          ),
+        );
+      }
+      for (final item in venue.unresolvedItems) {
+        rows.add(_buildDebateCardRow(item, day));
+      }
+    }
+    return rows;
+  }
+
+  /// Builds the "All" filter's view: a single day-wide timeline spanning
+  /// every venue, with debates from concurrently-sitting chambers rendered
+  /// as side-by-side columns. Falls back to the old back-to-back list when
+  /// nothing in the day has a known start time at all (a timeline with no
+  /// real anchors would be meaningless).
+  Widget _buildAllChambersTimeline(
+    List<DebateFeedItem> items,
+    List<SittingSession> sessions,
+    DateTime day,
+  ) {
+    final venues = _resolveVenueTimelines(items, sessions);
+    final lanes = _buildLanes(venues);
+    final combinedSpans = <TimelineSpan>[
+      for (final lane in lanes) ...lane.spans,
+    ];
+    final unresolvedItems = <DebateFeedItem>[
+      for (final venue in venues) ...venue.unresolvedItems,
+    ];
+    final bounds = timelineBounds(combinedSpans);
+
+    if (bounds == null) {
+      // Nothing in the day has any known start time — degrade to the plain
+      // chronological (feed-order) list instead of an empty/meaningless axis.
+      return ListView.builder(
+        itemCount: items.length,
+        itemBuilder:
+            (context, index) =>
+                _buildDebateCardRow(items[index], day, showVenue: true),
+      );
+    }
+
+    return Column(
+      children: [
+        _LaneHeaderRow(lanes: lanes),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView(
+            children: [
+              _DayTimeline(
+                lanes: lanes,
+                originSeconds: bounds.originSeconds,
+                endSeconds: bounds.endSeconds,
+                onTapDebate: (debateId) => _navigateToTranscript(day, debateId: debateId),
+              ),
+              if (unresolvedItems.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.only(top: 14, bottom: 8),
+                  child: Text(
+                    'Time unknown',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                for (final item in unresolvedItems)
+                  _buildDebateCardRow(item, day, showVenue: true),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Buckets [venues] into a fixed, small set of broad chamber lanes —
+  /// Commons, Westminster Hall, Lords, Committees — rather than one column
+  /// per individual venue. A real sitting day can have several committees
+  /// running concurrently (Public Bill Committees, Delegated Legislation
+  /// Committees, …), and giving each its own column made the "All" timeline
+  /// unreadably narrow; collapsing them into one shared "Committees" lane
+  /// (where they stack sequentially, or sub-split only among themselves if
+  /// they genuinely overlap) caps the timeline at ~4 columns regardless of
+  /// how busy the day is. Lanes with no items that day are omitted.
+  static List<_TimelineLane> _buildLanes(List<_VenueTimeline> venues) {
+    final itemsByLane = <String, List<DebateFeedItem>>{};
+    final spansByLane = <String, List<TimelineSpan>>{};
+    for (final venue in venues) {
+      final lane = _laneNameFor(venue.name);
+      itemsByLane.putIfAbsent(lane, () => []).addAll(venue.items);
+      spansByLane.putIfAbsent(lane, () => []).addAll(venue.spans);
+    }
+    return [
+      for (final name in _laneOrder)
+        if (itemsByLane[name]?.isNotEmpty ?? false)
+          _TimelineLane(
+            name: name,
+            accent: _houseAccentColor(_laneAccentHouse(name)),
+            items: itemsByLane[name]!,
+            spans: spansByLane[name]!,
+          ),
+    ];
+  }
+
+  static const List<String> _laneOrder = [
+    'Commons',
+    'Westminster Hall',
+    'Lords',
+    'Committees',
+  ];
+
+  static String _laneNameFor(String venueGroupName) {
+    switch (venueGroupName) {
+      case 'House of Commons':
+        return 'Commons';
+      case 'Westminster Hall':
+        return 'Westminster Hall';
+      case 'House of Lords':
+        return 'Lords';
+      default:
+        // Grand Committee, Committees, and anything else not recognised as
+        // one of the three main chambers share the Committees lane.
+        return 'Committees';
+    }
+  }
+
+  static String _laneAccentHouse(String laneName) =>
+      laneName == 'Committees' ? 'Committee' : laneName;
+
+  /// Groups [items] by [_feedGroupFor] (venue), resolves each group's
+  /// real `[start, end)` spans via [resolveVenueTimelineSpans] (seeded with
+  /// that venue's [SittingSession.startSeconds] when known), and returns one
+  /// [_VenueTimeline] per group in rank order. A venue can't run two debates
+  /// at once, so spans within one [_VenueTimeline] never overlap by
+  /// construction.
+  List<_VenueTimeline> _resolveVenueTimelines(
+    List<DebateFeedItem> items,
+    List<SittingSession> sessions,
   ) {
     final sorted = List<DebateFeedItem>.from(items)
       ..sort((a, b) => a.order.compareTo(b.order));
@@ -360,72 +523,60 @@ class _DateSelectorViewState extends State<DateSelectorView> {
       rankByGroup[group.name] = group.rank;
     }
 
-    final startTimeByGroup = <String, String>{};
+    final sessionByGroup = <String, SittingSession>{};
     for (final session in sessions) {
-      final startTime = session.startTime;
-      if (startTime == null) continue;
       final group = _feedGroupFor(session.house, session.section);
-      startTimeByGroup.putIfAbsent(group.name, () => startTime);
+      sessionByGroup.putIfAbsent(group.name, () => session);
     }
 
     final groupNames = itemsByGroup.keys.toList()
       ..sort((a, b) => rankByGroup[a]!.compareTo(rankByGroup[b]!));
 
-    final rows = <Widget>[];
-    for (var i = 0; i < groupNames.length; i++) {
-      final name = groupNames[i];
-      final groupItems = itemsByGroup[name]!;
-      rows.add(
-        Padding(
-          padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8),
-          child: _FeedGroupHeader(
-            name: name,
-            startTime: startTimeByGroup[name],
-            accent: _houseAccentColor(groupItems.first.house),
-          ),
+    return [
+      for (final name in groupNames)
+        _resolveOneVenueTimeline(
+          name: name,
+          rank: rankByGroup[name]!,
+          groupItems: itemsByGroup[name]!,
+          session: sessionByGroup[name],
         ),
-      );
-      for (final item in groupItems) {
-        rows.add(_buildDebateCardRow(item, day));
-      }
-    }
-    return rows;
-  }
-
-  /// Builds the "All" filter's rows: every debate in chronological order
-  /// (by first spoken timecode, falling back to feed order for items with no
-  /// timecode). Under the new tab system, paper items are filtered out before
-  /// reaching this point, so items contains only spoken debates.
-  List<Widget> _buildAllFeedRows(List<DebateFeedItem> items, DateTime day) {
-    final debateItems = List<DebateFeedItem>.from(items);
-
-    debateItems.sort((a, b) {
-      final aSeconds = _startSeconds(a);
-      final bSeconds = _startSeconds(b);
-      if (aSeconds != null && bSeconds != null) {
-        final cmp = aSeconds.compareTo(bSeconds);
-        if (cmp != 0) return cmp;
-      } else if (aSeconds != null) {
-        return -1;
-      } else if (bSeconds != null) {
-        return 1;
-      }
-      return a.order.compareTo(b.order);
-    });
-
-    return <Widget>[
-      for (final item in debateItems)
-        _buildDebateCardRow(item, day, showVenue: true),
     ];
   }
 
-  /// The item's first spoken timecode as seconds since midnight, or `null`
-  /// when it has none (parsed once here so chronological sort can short of
-  /// re-parsing on every comparison).
-  int? _startSeconds(DebateFeedItem item) {
-    final raw = item.startTimecode;
-    return raw != null ? parseTimecodeToSeconds(raw) : null;
+  _VenueTimeline _resolveOneVenueTimeline({
+    required String name,
+    required int rank,
+    required List<DebateFeedItem> groupItems,
+    SittingSession? session,
+  }) {
+    final spans = resolveVenueTimelineSpans(
+      _toTimelineItems(groupItems),
+      sessionStartSeconds: session?.startSeconds,
+    );
+    final resolvedIds = {for (final span in spans) span.id};
+    final byId = {for (final item in groupItems) item.debateId: item};
+    return _VenueTimeline(
+      name: name,
+      rank: rank,
+      accent: _houseAccentColor(groupItems.first.house),
+      startTimeLabel: session?.startTime,
+      items: [for (final span in spans) byId[span.id]!],
+      spans: spans,
+      unresolvedItems:
+          groupItems.where((i) => !resolvedIds.contains(i.debateId)).toList(),
+    );
   }
+
+  static List<TimelineItem> _toTimelineItems(List<DebateFeedItem> items) => [
+    for (final item in items)
+      TimelineItem(
+        id: item.debateId,
+        order: item.order,
+        startSeconds: item.startSeconds,
+        fallbackDurationMinutes:
+            item.durationMinutes < 1 ? 1 : item.durationMinutes,
+      ),
+  ];
 
   Widget _buildDebateCardRow(
     DebateFeedItem item,
@@ -688,6 +839,337 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   }
 }
 
+/// One venue's resolved timeline for a sitting day: its debates in running
+/// order (aligned index-for-index with [spans]), plus any debate that
+/// couldn't be placed on the axis at all (no start time of its own, no
+/// carried-forward start, and no session seed — see [unresolvedItems]).
+class _VenueTimeline {
+  final String name;
+  final int rank;
+  final Color accent;
+  final String? startTimeLabel;
+  final List<DebateFeedItem> items;
+  final List<TimelineSpan> spans;
+  final List<DebateFeedItem> unresolvedItems;
+
+  const _VenueTimeline({
+    required this.name,
+    required this.rank,
+    required this.accent,
+    required this.items,
+    required this.spans,
+    required this.unresolvedItems,
+    this.startTimeLabel,
+  });
+}
+
+/// One broad-chamber column in the "All" filter's day-wide timeline — see
+/// [_DateSelectorViewState._buildLanes]. May combine several individual
+/// venues (e.g. every Public Bill/Delegated Legislation Committee sitting
+/// that day shares one "Committees" lane), so unlike [_VenueTimeline], spans
+/// within a lane CAN genuinely overlap and are sub-split via
+/// [layoutOverlappingSpans] within the lane's own column width.
+class _TimelineLane {
+  final String name;
+  final Color accent;
+  final List<DebateFeedItem> items;
+  final List<TimelineSpan> spans;
+
+  const _TimelineLane({
+    required this.name,
+    required this.accent,
+    required this.items,
+    required this.spans,
+  });
+}
+
+/// Fixed (non-scrolling) header naming each lane above the "All" filter's
+/// day-wide timeline, left-padded to align with the [_HourRuler] gutter.
+class _LaneHeaderRow extends StatelessWidget {
+  final List<_TimelineLane> lanes;
+
+  const _LaneHeaderRow({required this.lanes});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        const SizedBox(width: _timeGutterWidth),
+        for (final lane in lanes)
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration:
+                        BoxDecoration(color: lane.accent, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      lane.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Renders one venue's debates on a proportional time axis local to that
+/// venue: absolutely positioned cards whose height reflects real elapsed
+/// duration (including gaps), instead of the old back-to-back list. Since a
+/// venue can't run two debates at once, [spans] never overlap by
+/// construction — [layoutOverlappingSpans] still runs unconditionally here
+/// (cheap, and a free defensive correctness net against anomalous source
+/// timecodes) but normally hands back full-width slots for every card.
+class _VenueTimelineBlock extends StatelessWidget {
+  final List<DebateFeedItem> items;
+  final List<TimelineSpan> spans;
+  final void Function(String debateId) onTapDebate;
+
+  const _VenueTimelineBlock({
+    required this.items,
+    required this.spans,
+    required this.onTapDebate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (spans.isEmpty) return const SizedBox.shrink();
+
+    final slots = layoutOverlappingSpans(spans);
+    final slotById = {for (final slot in slots) slot.id: slot};
+    final origin = spans.map((s) => s.startSeconds).reduce(math.min);
+
+    var blockHeight = 0.0;
+    final rects = <({double top, double height})>[];
+    for (final span in spans) {
+      final rect = timelineVerticalRect(
+        startSeconds: span.startSeconds,
+        endSeconds: span.endSeconds,
+        originSeconds: origin,
+        pixelsPerMinute: _timelinePixelsPerMinute,
+        minHeight: _minDebateCardHeight,
+      );
+      rects.add(rect);
+      final bottom = rect.top + rect.height;
+      if (bottom > blockHeight) blockHeight = bottom;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return SizedBox(
+          height: blockHeight,
+          child: Stack(
+            children: [
+              for (var i = 0; i < items.length; i++)
+                _positionedCard(
+                  item: items[i],
+                  span: spans[i],
+                  slot: slotById[spans[i].id]!,
+                  rect: rects[i],
+                  width: width,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _positionedCard({
+    required DebateFeedItem item,
+    required TimelineSpan span,
+    required TimelineSlot slot,
+    required ({double top, double height}) rect,
+    required double width,
+  }) {
+    return Positioned(
+      top: rect.top,
+      height: rect.height,
+      left: slot.left * width,
+      width: slot.width * width,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 6, bottom: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _DebateTimeMark(startTimecode: item.startTimecode),
+            Expanded(
+              child: _HouseAccentCard(
+                house: item.house,
+                onTap: () => onTapDebate(item.debateId),
+                child: _DebateCardContent(item: item),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The "All" filter's day-wide timeline: every venue's debates positioned
+/// against one shared clock, with debates from concurrently-sitting
+/// chambers rendered as side-by-side columns (via [layoutOverlappingSpans]).
+/// Owns its own scrolling, since the shared [_HourRuler] gutter must scroll
+/// in lockstep with the cards.
+class _DayTimeline extends StatelessWidget {
+  final List<_TimelineLane> lanes;
+  final int originSeconds;
+  final int endSeconds;
+  final void Function(String debateId) onTapDebate;
+
+  const _DayTimeline({
+    required this.lanes,
+    required this.originSeconds,
+    required this.endSeconds,
+    required this.onTapDebate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final totalHeight =
+        (endSeconds - originSeconds) / 60 * _timelinePixelsPerMinute;
+
+    return SizedBox(
+      height: totalHeight,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _HourRuler(
+            originSeconds: originSeconds,
+            endSeconds: endSeconds,
+            height: totalHeight,
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final laneWidth = constraints.maxWidth / lanes.length;
+                return Stack(
+                  children: [
+                    for (var laneIndex = 0; laneIndex < lanes.length; laneIndex++)
+                      ..._positionedCardsForLane(lanes[laneIndex], laneIndex, laneWidth),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Positions one lane's cards within its own column: [layoutOverlappingSpans]
+  /// runs scoped to just this lane's spans, so several genuinely-concurrent
+  /// items sharing a lane (e.g. two committees sitting at once) sub-split
+  /// only the lane's own width rather than the whole day's row.
+  List<Widget> _positionedCardsForLane(
+    _TimelineLane lane,
+    int laneIndex,
+    double laneWidth,
+  ) {
+    final slots = layoutOverlappingSpans(lane.spans);
+    final slotById = {for (final slot in slots) slot.id: slot};
+    final laneLeft = laneIndex * laneWidth;
+    return [
+      for (var i = 0; i < lane.items.length; i++)
+        _positionedCard(
+          item: lane.items[i],
+          span: lane.spans[i],
+          slot: slotById[lane.spans[i].id]!,
+          laneLeft: laneLeft,
+          laneWidth: laneWidth,
+        ),
+    ];
+  }
+
+  Widget _positionedCard({
+    required DebateFeedItem item,
+    required TimelineSpan span,
+    required TimelineSlot slot,
+    required double laneLeft,
+    required double laneWidth,
+  }) {
+    final rect = timelineVerticalRect(
+      startSeconds: span.startSeconds,
+      endSeconds: span.endSeconds,
+      originSeconds: originSeconds,
+      pixelsPerMinute: _timelinePixelsPerMinute,
+      minHeight: _minDebateCardHeight,
+    );
+    return Positioned(
+      top: rect.top,
+      height: rect.height,
+      left: laneLeft + (slot.left * laneWidth),
+      width: slot.width * laneWidth,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 6, bottom: 6),
+        child: _HouseAccentCard(
+          house: item.house,
+          onTap: () => onTapDebate(item.debateId),
+          child: _DebateCardContent(item: item, showVenue: true),
+        ),
+      ),
+    );
+  }
+}
+
+/// The day timeline's shared left gutter: one hour label per hour boundary
+/// between [originSeconds] and [endSeconds]. Cards in [_DayTimeline] skip
+/// their own per-card start-time label (no room for one once a card can be
+/// a third-width column) — this shared ruler is their only time reference.
+class _HourRuler extends StatelessWidget {
+  final int originSeconds;
+  final int endSeconds;
+  final double height;
+
+  const _HourRuler({
+    required this.originSeconds,
+    required this.endSeconds,
+    required this.height,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final firstHour = ((originSeconds + 3599) ~/ 3600) * 3600;
+    final ticks = <Widget>[
+      for (var hour = firstHour; hour <= endSeconds; hour += 3600)
+        Positioned(
+          top: (hour - originSeconds) / 60 * _timelinePixelsPerMinute - 7,
+          right: 8,
+          child: Text(
+            formatSecondsAsClockMinute(hour),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+    ];
+    return SizedBox(
+      width: _timeGutterWidth,
+      height: height,
+      child: Stack(children: ticks),
+    );
+  }
+}
+
 /// Card body for a single debate. Reveals progressively more detail as the
 /// card grows taller (cards are sized in proportion to debate duration), so
 /// long debates fill their extra space with engagement stats and a party
@@ -911,20 +1393,35 @@ class _AdaptiveExtraContent extends StatelessWidget {
 
         final hasVisibleSpeakers = visibleSpeakerCount > 0;
 
+        // The speaker-count and chip/meta height estimates above are just
+        // that — estimates (text scale, locale, and wrap behaviour at
+        // narrow card widths can all push the real rendered height taller
+        // than assumed). Both branches below give the pie/speakers section
+        // a computed height rather than an unconditional Expanded, and are
+        // wrapped in a non-interactive SingleChildScrollView so a bad
+        // estimate clips gracefully instead of overflowing the card.
         if (showPie && hasParties && hasVisibleSpeakers) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ...extraChildren,
-              const SizedBox(height: 8),
-              _TopSpeakersList(
-                speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: _PartyContributionPie(breakdown: item.partyBreakdown),
-              ),
-            ],
+          final speakersListHeight = 8.0 + (38.0 * visibleSpeakerCount);
+          final pieHeight =
+              (remainingHeight - speakersListHeight - 8.0).clamp(0.0, double.infinity);
+          return SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...extraChildren,
+                const SizedBox(height: 8),
+                _TopSpeakersList(
+                  speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: pieHeight,
+                  child: _PartyContributionPie(breakdown: item.partyBreakdown),
+                ),
+              ],
+            ),
           );
         }
 
@@ -932,21 +1429,24 @@ class _AdaptiveExtraContent extends StatelessWidget {
         final showPartyBar =
             !showSpeakersList && hasParties && (remainingHeight >= 12.0);
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ...extraChildren,
-            if (showSpeakersList) ...[
-              const SizedBox(height: 8),
-              _TopSpeakersList(
-                speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
-              ),
-            ] else if (showPartyBar) ...[
-              const SizedBox(height: 6),
-              _PartyContributionBar(breakdown: item.partyBreakdown),
+        return SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...extraChildren,
+              if (showSpeakersList) ...[
+                const SizedBox(height: 8),
+                _TopSpeakersList(
+                  speakers: item.topSpeakers.take(visibleSpeakerCount).toList(),
+                ),
+              ] else if (showPartyBar) ...[
+                const SizedBox(height: 6),
+                _PartyContributionBar(breakdown: item.partyBreakdown),
+              ],
             ],
-          ],
+          ),
         );
       },
     );

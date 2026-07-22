@@ -59,6 +59,10 @@ class DebateFeedItem {
   final String debateId;
   final int order;
   final String? startTimecode;
+
+  /// [startTimecode] parsed to seconds since midnight, computed once here so
+  /// callers (chronological sort, timeline layout) don't re-parse it.
+  final int? startSeconds;
   final String? section;
 
   /// Number of distinct speakers who made a meaningful contribution.
@@ -86,6 +90,7 @@ class DebateFeedItem {
     this.debateId = '',
     this.order = 0,
     this.startTimecode,
+    this.startSeconds,
     this.section,
     this.speakerCount = 0,
     this.contributionCount = 0,
@@ -120,7 +125,17 @@ class SittingSession {
   /// header's first timecode), or `null` when the header carries no time.
   final String? startTime;
 
-  const SittingSession({required this.house, this.section, this.startTime});
+  /// [startTime]'s underlying seconds-since-midnight, used to seed the
+  /// venue's first debate on the day timeline when that debate has no
+  /// timecode of its own.
+  final int? startSeconds;
+
+  const SittingSession({
+    required this.house,
+    this.section,
+    this.startTime,
+    this.startSeconds,
+  });
 }
 
 /// Result of [DateSelectorViewModel.loadDebateFeedWithStatus]: the debate
@@ -628,6 +643,10 @@ class DateSelectorViewModel extends ChangeNotifier {
               sittingStartSecondsByRoot[d.id],
               firstDirectTimecodeByRoot[d.id],
             ),
+            startSeconds: _sessionStartSeconds(
+              sittingStartSecondsByRoot[d.id],
+              firstDirectTimecodeByRoot[d.id],
+            ),
           ),
     ];
 
@@ -651,6 +670,9 @@ class DateSelectorViewModel extends ChangeNotifier {
                 order: d.orderIndex,
                 section: d.section,
                 startTimecode: firstTimecodeByDebateId[d.id],
+                startSeconds: firstTimecodeByDebateId[d.id] != null
+                    ? parseTimecodeToSeconds(firstTimecodeByDebateId[d.id]!)
+                    : null,
                 speakerCount: speakerKeysByRoot[d.id]?.length ?? 0,
                 contributionCount: contributionCountByRoot[d.id] ?? 0,
                 partyBreakdown: _partyBreakdown(partyCountsByRoot[d.id]),
@@ -674,6 +696,9 @@ class DateSelectorViewModel extends ChangeNotifier {
             order: orderByDebateId[entry.key] ?? 0,
             section: sectionByDebateId[entry.key],
             startTimecode: firstTimecodeByDebateId[entry.key],
+            startSeconds: firstTimecodeByDebateId[entry.key] != null
+                ? parseTimecodeToSeconds(firstTimecodeByDebateId[entry.key]!)
+                : null,
             speakerCount: speakerKeysByRoot[entry.key]?.length ?? 0,
             contributionCount: contributionCountByRoot[entry.key] ?? 0,
             partyBreakdown: _partyBreakdown(partyCountsByRoot[entry.key]),
@@ -687,14 +712,23 @@ class DateSelectorViewModel extends ChangeNotifier {
     return _AssembledFeed(items: items, sessions: sessions);
   }
 
-  /// Formats a day header's sitting start as `HH:MM`, preferring the parsed
-  /// "met at …" announcement over the header's first bare timecode.
+  /// A day header's sitting start in seconds since midnight, preferring the
+  /// parsed "met at …" announcement over the header's first bare timecode.
+  static int? _sessionStartSeconds(
+    int? sittingStartSeconds,
+    String? firstTimecode,
+  ) {
+    return sittingStartSeconds ??
+        (firstTimecode != null ? parseTimecodeToSeconds(firstTimecode) : null);
+  }
+
+  /// Formats a day header's sitting start as `HH:MM` (see
+  /// [_sessionStartSeconds]), or `null` when the header carries no time.
   static String? _sessionStartLabel(
     int? sittingStartSeconds,
     String? firstTimecode,
   ) {
-    final seconds = sittingStartSeconds ??
-        (firstTimecode != null ? parseTimecodeToSeconds(firstTimecode) : null);
+    final seconds = _sessionStartSeconds(sittingStartSeconds, firstTimecode);
     if (seconds == null) return null;
     return formatSecondsAsClockMinute(seconds);
   }

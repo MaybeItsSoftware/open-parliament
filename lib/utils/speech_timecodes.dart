@@ -21,6 +21,13 @@ int? parseTimecodeToSeconds(String raw) {
   final trimmed = raw.trim();
   final isoParsed = DateTime.tryParse(trimmed);
   if (isoParsed != null && trimmed.contains('T')) {
+    // The live Hansard API serializes an unset Timecode as a default/empty
+    // .NET DateTime ("0001-01-01T00:00:00") rather than omitting the field,
+    // so a parsed year this implausibly early means "no real timecode was
+    // recorded" — not a genuine sitting at midnight in year 1. Treating it
+    // as parseable would otherwise anchor that row to 00:00, which corrupts
+    // any layout built on real elapsed time (e.g. the day view's timeline).
+    if (isoParsed.year < 1970) return null;
     return (isoParsed.hour * 3600) + (isoParsed.minute * 60) + isoParsed.second;
   }
 

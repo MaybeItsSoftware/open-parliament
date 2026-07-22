@@ -34,5 +34,16 @@ void main() {
       expect(parseTimecodeToSeconds('25:00'), isNull);
       expect(parseTimecodeToSeconds('12:60'), isNull);
     });
+
+    test('returns null for the .NET default-DateTime sentinel', () {
+      // The live Hansard API serializes an unset Timecode as
+      // "0001-01-01T00:00:00" rather than omitting the field — this must
+      // read as "no timecode", not a real midnight sitting.
+      expect(parseTimecodeToSeconds('0001-01-01T00:00:00'), isNull);
+    });
+
+    test('still parses a genuine modern midnight timecode', () {
+      expect(parseTimecodeToSeconds('2026-07-15T00:00:00'), 0);
+    });
   });
 }
