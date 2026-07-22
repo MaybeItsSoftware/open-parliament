@@ -33,11 +33,14 @@ class SpeakerContributionCard extends StatelessWidget {
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
     final speaker = speakerIdentityFor(speech, member);
-    final partyKey = member?.partyAbbreviation.isNotEmpty == true
-        ? member!.partyAbbreviation
-        : (member?.party.isNotEmpty == true
-            ? member!.party
-            : speaker.partyFromAttribution);
+    // Prefer the party Hansard actually printed that day over the member's
+    // current cached party, so debates stay accurate for MPs who have since
+    // defected, lost the whip, or otherwise changed party.
+    final partyKey = speaker.partyFromAttribution.isNotEmpty
+        ? speaker.partyFromAttribution
+        : (member?.partyAbbreviation.isNotEmpty == true
+            ? member!.partyAbbreviation
+            : (member?.party ?? ''));
     final partyColor =
         party_util.partyColor(partyKey, fallback: const Color(0xFF6C757D));
 
