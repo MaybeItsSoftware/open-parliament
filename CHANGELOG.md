@@ -1,3 +1,11 @@
+## [0.7.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.7.0...v0.7.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* party colour now considers date for historical accuracy ([ec9f14a](https://github.com/MaybeItsSoftware/open-parliament/commit/ec9f14a87664dcfce1e15836f10df1d807bfd7f0))
+* restore and reform's colours ([e6e08c7](https://github.com/MaybeItsSoftware/open-parliament/commit/e6e08c7dbc7f4ceb8e2e47b0c75f212951a5797d))
+
 # [0.7.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.6.0...v0.7.0) (2026-07-21)
 
 
