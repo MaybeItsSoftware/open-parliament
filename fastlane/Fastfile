@@ -1,6 +1,7 @@
 # Release lanes for Open Parliament (Flutter).
 #
 #   bundle exec fastlane ios beta       # build IPA → TestFlight (called by deploy.yml on tag)
+#   bundle exec fastlane ios tramline version_name:X version_code:N  # Tramline → TestFlight (tramline-ios.yml)
 #   bundle exec fastlane ios release    # submit latest TestFlight build for App Store review
 #   bundle exec fastlane android beta   # build AAB → Play internal + closed (alpha) testing
 #   bundle exec fastlane android promote # promote internal → production
@@ -56,6 +57,53 @@ platform :ios do
       api_key:                          api_key,
       ipa:                              Dir.glob(File.join(ROOT, "build", "ios", "ipa", "*.ipa")).first,
       skip_waiting_for_build_processing: true,
+    )
+  end
+
+  desc "Tramline: build a signed IPA with Tramline's version and upload it to TestFlight"
+  # Called by .github/workflows/tramline-ios.yml. Tramline owns the version:
+  # version_name → CFBundleShortVersionString, version_code → CFBundleVersion
+  # (Tramline finds the build in App Store Connect by that number). No external
+  # distribution here — Tramline handles TestFlight groups and submission.
+  lane :tramline do |options|
+    version_name = options[:version_name].to_s
+    version_code = options[:version_code].to_s
+    UI.user_error!("version_name must look like 1.2.3") unless version_name.match?(/\A[0-9A-Za-z.\-]+\z/)
+    UI.user_error!("version_code must be an integer") unless version_code.match?(/\A\d+\z/)
+
+    setup_ci
+
+    api_key = app_store_connect_api_key(
+      key_id:                  ENV["ASC_KEY_ID"],
+      issuer_id:               ENV["ASC_ISSUER_ID"],
+      key_content:             ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64:   true,
+    )
+
+    match(
+      type:           "appstore",
+      app_identifier: APP_ID,
+      api_key:        api_key,
+      readonly:       is_ci,
+    )
+
+    update_code_signing_settings(
+      path:                 File.join(ROOT, "ios", "Runner.xcodeproj"),
+      use_automatic_signing: false,
+      team_id:              TEAM_ID,
+      code_sign_identity:   "Apple Distribution",
+      profile_name:         "match AppStore #{APP_ID}",
+      bundle_identifier:    APP_ID,
+      targets:              ["Runner"],
+    )
+
+    sh("cd #{ROOT} && flutter build ipa --release --build-name=#{version_name} --build-number=#{version_code} --export-options-plist=ios/ExportOptions.plist")
+
+    upload_to_testflight(
+      api_key:                          api_key,
+      ipa:                              Dir.glob(File.join(ROOT, "build", "ios", "ipa", "*.ipa")).first,
+      skip_waiting_for_build_processing: true,
+      distribute_external:              false,
     )
   end
 
