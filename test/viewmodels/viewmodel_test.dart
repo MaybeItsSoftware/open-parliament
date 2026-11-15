@@ -259,13 +259,20 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<int> clearCachedMembers() async => 0;
 
+  /// Scripted result for [findLiveEventForDebate]; [findLiveEventCalls]
+  /// counts every invocation so tests can pin memoisation.
+  ParliamentLiveEvent? liveEventResult;
+  int findLiveEventCalls = 0;
+
   @override
   Future<ParliamentLiveEvent?> findLiveEventForDebate({
     required String date,
     required String debateTitle,
     String? house,
-  }) async =>
-      null;
+  }) async {
+    findLiveEventCalls++;
+    return liveEventResult;
+  }
 
   @override
   Future<Map<String, dynamic>?> fetchMemberDetail(int id) async => null;
@@ -1761,6 +1768,128 @@ void main() {
       await vm.loadSpeeches();
       expect(
           vm.parliamentLiveStartTimecodeForDebateTitle('Debate B'), '10:15:00');
+    });
+
+    group('per-speech parliamentlive deep-link', () {
+      test('timecode prefers the speech\'s explicit timecode', () async {
+        fakeService.speechesResult = [
+          makeSpeech(
+            id: 't1',
+            memberName: '',
+            itemType: 'Timestamp',
+            speechText: '10:00:00',
+            orderIndex: 0,
+          ),
+          makeSpeech(
+            id: 's1',
+            memberName: 'Alice',
+            memberId: 1,
+            timecode: '10:07:30',
+            orderIndex: 1,
+          ),
+        ];
+
+        await vm.loadSpeeches();
+        final index = vm.speeches.indexWhere((s) => s.id == 's1');
+        expect(vm.parliamentLiveTimecodeForSpeechIndex(index), '10:07:30');
+        expect(vm.parliamentLiveClockLabelForSpeechIndex(index), '10:08');
+      });
+
+      test('timecode falls back to interpolated anchors', () async {
+        fakeService.speechesResult = [
+          makeSpeech(
+            id: 't1',
+            memberName: '',
+            itemType: 'Timestamp',
+            speechText: '10:00:00',
+            orderIndex: 0,
+          ),
+          makeSpeech(id: 's1', memberName: 'Alice', memberId: 1, orderIndex: 1),
+          makeSpeech(id: 's2', memberName: 'Bob', memberId: 2, orderIndex: 2),
+          makeSpeech(
+            id: 't2',
+            memberName: '',
+            itemType: 'Timestamp',
+            speechText: '10:10:00',
+            orderIndex: 3,
+          ),
+        ];
+
+        await vm.loadSpeeches();
+        final index = vm.speeches.indexWhere((s) => s.id == 's1');
+        expect(vm.speeches[index].timecode, isNull);
+        final expected = vm.estimatedTimeForSpeechIndex(index);
+        expect(expected, isNotNull);
+        final timecode = vm.parliamentLiveTimecodeForSpeechIndex(index);
+        expect(timecode, isNotNull);
+        expect(timecode, matches(RegExp(r'^10:\d\d:\d\d$')));
+        expect(vm.parliamentLiveClockLabelForSpeechIndex(index), expected);
+      });
+
+      test('no timecode or anchors yields null timecode and target', () async {
+        fakeService.speechesResult = [
+          makeSpeech(id: 's1', memberName: 'Alice', memberId: 1),
+        ];
+
+        await vm.loadSpeeches();
+        expect(vm.parliamentLiveTimecodeForSpeechIndex(0), isNull);
+        expect(vm.parliamentLiveClockLabelForSpeechIndex(0), isNull);
+        expect(await vm.parliamentLiveTargetForSpeech(0), isNull);
+        expect(vm.parliamentLiveTimecodeForSpeechIndex(5), isNull);
+        expect(fakeService.findLiveEventCalls, 0);
+      });
+
+      test('target seeks to the speech and reuses the event lookup', () async {
+        const guid = '12345678-1234-1234-1234-123456789abc';
+        fakeService.liveEventResult =
+            const ParliamentLiveEvent(guid: guid, title: 'Test Debate');
+        fakeService.speechesResult = [
+          makeSpeech(
+            id: 's1',
+            memberName: 'Alice',
+            memberId: 1,
+            timecode: '10:03:04',
+            orderIndex: 0,
+          ),
+          makeSpeech(
+            id: 's2',
+            memberName: 'Bob',
+            memberId: 2,
+            timecode: '10:20:00',
+            orderIndex: 1,
+          ),
+        ];
+
+        await vm.loadSpeeches();
+        final debate = await vm.parliamentLiveTarget();
+        final first = await vm.parliamentLiveTargetForSpeech(0);
+        final second = await vm.parliamentLiveTargetForSpeech(1);
+
+        expect(debate.launchUrl.queryParameters['in'], '10:03:04');
+        expect(first!.hasDirectEvent, isTrue);
+        expect(first.launchUrl.path, contains(guid));
+        expect(first.launchUrl.queryParameters['in'], '10:03:04');
+        expect(second!.launchUrl.queryParameters['in'], '10:20:00');
+        expect(fakeService.findLiveEventCalls, 1);
+      });
+
+      test('falls back to the day search when no event matches', () async {
+        fakeService.speechesResult = [
+          makeSpeech(
+            id: 's1',
+            memberName: 'Alice',
+            memberId: 1,
+            timecode: '10:03:04',
+          ),
+        ];
+
+        await vm.loadSpeeches();
+        final target = await vm.parliamentLiveTargetForSpeech(0);
+        expect(target, isNotNull);
+        expect(target!.hasDirectEvent, isFalse);
+        expect(target.inlineUrl, isNull);
+        expect(target.launchUrl.path, '/Search');
+      });
     });
 
     test('primaryDebateTitle is fixed from loaded transcript', () async {

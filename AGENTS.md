@@ -275,7 +275,7 @@ If you change the matcher, keep these requirements in mind:
 - A given title can appear twice on the same day (morning + afternoon committee). The current code returns the first match — disambiguating by start time is a planned Phase 2 (the `_TimeAnchor` we already harvest from "The House met at …" gives us the data to do it).
 - Chamber proceedings ("Cabinet Office", "Oral Answers to Questions") have no dedicated broadcast — they're moments inside the bigger "House of Commons" video. The matcher returns null for these and the caller falls back to the day-search URL.
 
-Deep-linking per speech via `?in=HH:MM:SS` is supported by parliamentlive.tv but not yet wired up; speech `Timecode` values are the obvious source.
+Per-speech deep-linking uses parliamentlive.tv's `?in=HH:MM:SS` seek. `TranscriptViewModel.parliamentLiveTimecodeForSpeechIndex` picks the speech's explicit `Timecode`, falling back to a time interpolated from the transcript's anchors (null when neither exists); `parliamentLiveTargetForSpeech` builds a `ParliamentLiveTarget` from the same memoised event lookup the debate-level button uses, so only the `in` timecode differs per speech. The transcript view passes a "Watch from here" callback and `HH:MM` label into `showSpeechActionsSheet` (long-press) only when a timecode exists and the section has video — the sheet itself never touches the view-model or services. When no direct event matches, the action opens the day-search URL and a snackbar says so. Times are estimates: interpolated anchors and Hansard timecodes don't always line up exactly with the broadcast.
 
 ## Glossary
 

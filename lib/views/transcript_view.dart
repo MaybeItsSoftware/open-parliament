@@ -752,7 +752,7 @@ class _TranscriptViewState extends State<TranscriptView>
                 onLongPress:
                     speech.speechText.trim().isEmpty
                         ? null
-                        : () => _showSpeechActions(speech, member),
+                        : () => _showSpeechActions(speech, member, speechIndex),
                 child: SpeechBlock(
                   speech: speech,
                   member: member,
@@ -980,10 +980,18 @@ class _TranscriptViewState extends State<TranscriptView>
     return theme.colorScheme.outlineVariant.withValues(alpha: 0.6);
   }
 
-  void _showSpeechActions(Speech speech, Member? member) {
+  void _showSpeechActions(Speech speech, Member? member, int speechIndex) {
     final speaker = speakerIdentityFor(speech, member);
+    final clockLabel =
+        parliamentLiveSectionHasVideo(_vm.primarySection)
+            ? _vm.parliamentLiveClockLabelForSpeechIndex(speechIndex)
+            : null;
     showSpeechActionsSheet(
       context,
+      onWatchFromHere:
+          clockLabel == null ? null : () => _watchSpeechFrom(speechIndex),
+      watchFromHereLabel:
+          clockLabel == null ? null : 'Parliament Live from about $clockLabel',
       speech: SavedSpeech(
         speechId: speech.id,
         date: widget.date,
@@ -994,6 +1002,36 @@ class _TranscriptViewState extends State<TranscriptView>
         speechText: speech.speechText,
         savedAt: DateTime.now(),
       ),
+    );
+  }
+
+  /// Opens parliamentlive.tv at the speech's timecode. When no direct event
+  /// matches the debate, says so and opens the day's video search instead of
+  /// implying the video starts at this speech.
+  Future<void> _watchSpeechFrom(int speechIndex) async {
+    final target = await _vm.parliamentLiveTargetForSpeech(speechIndex);
+    if (!mounted) return;
+    if (target == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No video time available for this speech')),
+      );
+      return;
+    }
+    if (!target.hasDirectEvent) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Couldn't find this debate's video — opening the day's "
+            'Parliament Live search instead',
+          ),
+        ),
+      );
+    }
+    await _openParliamentLiveUrl(
+      target.launchUrl,
+      title: target.hasDirectEvent
+          ? 'Parliament Live · ${target.title}'
+          : 'Parliament Live search',
     );
   }
 
