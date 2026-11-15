@@ -251,6 +251,9 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<int> wipeDebateCache() async => 0;
 
   @override
+  Future<int> evictOldSittings() async => 0;
+
+  @override
   Future<int> clearMapBoundaries() async => 0;
 
   @override

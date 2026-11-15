@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
+import 'services/database_service.dart';
 import 'services/parliamentary_data_service.dart';
 import 'services/saved_speeches_service.dart';
 import 'services/startup_prefetch_service.dart';
@@ -85,6 +86,23 @@ void _startApp({
       savedSpeechesService: savedSpeechesService,
       startupPrefetchService: startupPrefetchService,
     ),
+  );
+  // Keep the per-day sitting cache bounded. Runs after the first frame and
+  // only touches days older than the recent window, so it can't race the
+  // landing screen.
+  unawaited(
+    DatabaseService()
+        .evictSittings()
+        .then<void>((_) {})
+        .catchError(
+          (Object error, StackTrace stack) => FlutterError.reportError(
+            FlutterErrorDetails(
+              exception: error,
+              stack: stack,
+              library: 'sitting cache eviction',
+            ),
+          ),
+        ),
   );
   if (startupPrefetchService.prefetchOnStartup) {
     unawaited(

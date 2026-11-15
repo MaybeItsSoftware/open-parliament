@@ -350,6 +350,7 @@ class ParliamentaryDataService {
   Future<List<Speech>> _getSpeechesUncoalesced(String date) async {
     final alreadyCached = await _db.sittingDbExists(date);
     if (!alreadyCached) return _fetchAndCacheSitting(date);
+    await _db.touchSitting(date);
 
     final cached = await _loadSpeechesFromDb(date);
     // Rows cached before root_debate_id existed can't be grouped by root
@@ -712,6 +713,12 @@ class ParliamentaryDataService {
   }
 
   Future<int> wipeDebateCache() => _db.wipeDebateCache();
+
+  /// Deletes the least recently opened sitting days beyond the on-disk cap
+  /// (see [DatabaseService.evictSittings]). Days being fetched right now are
+  /// left alone. Returns the number of days deleted.
+  Future<int> evictOldSittings() =>
+      _db.evictSittings(protect: _speechesInFlight.keys.toSet());
 
   /// Deletes cached map boundary geometry (constituencies + councils).
   Future<int> clearMapBoundaries() => _boundaryService.clearCache();

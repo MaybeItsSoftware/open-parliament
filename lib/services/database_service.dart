@@ -14,15 +14,29 @@ import 'package:sqflite/sqflite.dart';
 class DatabaseService {
   static const String _membersDbName = 'members.db';
 
+  /// How many sitting days to keep on disk. Each day is its own database
+  /// (often a few MB for a busy day); without a cap the cache grows forever.
+  static const int defaultSittingKeepCount = 60;
+
+  /// Sitting days within this many days of today are never evicted: they
+  /// are the ones the landing screen and stepper open, and may be in use.
+  static const int recentSittingProtectionDays = 14;
+
+  final Future<Directory> Function() _directory;
+
+  /// [directory] overrides where databases live (tests use a temp dir).
+  DatabaseService({Future<Directory> Function()? directory})
+    : _directory = directory ?? getApplicationSupportDirectory;
+
   /// Returns the absolute path to the members database file.
   Future<String> membersDbPath() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _directory();
     return p.join(dir.path, _membersDbName);
   }
 
   /// Returns the absolute path to the sitting database for [date] (YYYY-MM-DD).
   Future<String> sittingDbPath(String date) async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _directory();
     return p.join(dir.path, 'sitting_$date.db');
   }
 
@@ -83,7 +97,11 @@ class DatabaseService {
           // Existing member rows predate the constituency column (it was added
           // empty). Drop the freshness marker so the next read re-fetches
           // members with their constituency populated, enabling the control map.
-          await db.delete('meta', where: 'key = ?', whereArgs: ['last_fetched']);
+          await db.delete(
+            'meta',
+            where: 'key = ?',
+            whereArgs: ['last_fetched'],
+          );
         }
       },
     );
@@ -93,7 +111,7 @@ class DatabaseService {
   ///
   /// Returns the number of files deleted.
   Future<int> wipeDebateCache() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _directory();
     int count = 0;
     await for (final entity in dir.list()) {
       if (entity is File &&
@@ -118,7 +136,7 @@ class DatabaseService {
 
   /// Lists cached sitting dates (YYYY-MM-DD) for every local sitting database.
   Future<List<String>> cachedSittingDates() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _directory();
     final dates = <String>[];
     final pattern = RegExp(r'^sitting_(\d{4}-\d{2}-\d{2})\.db$');
     await for (final entity in dir.list()) {
@@ -131,6 +149,57 @@ class DatabaseService {
     }
     dates.sort((a, b) => b.compareTo(a));
     return dates;
+  }
+
+  /// Marks [date]'s sitting database as just used, so [evictSittings] keeps
+  /// it. Reads don't change a file's modified time on their own. Best-effort.
+  Future<void> touchSitting(String date) async {
+    try {
+      await File(await sittingDbPath(date)).setLastModified(DateTime.now());
+    } catch (_) {
+      // A missing file or a read-only filesystem just means no LRU bump.
+    }
+  }
+
+  /// Deletes the least recently used sitting databases beyond [keep],
+  /// never touching days within [recentSittingProtectionDays] of [now]
+  /// or any date in [protect]. Returns the number of days deleted.
+  Future<int> evictSittings({
+    int keep = defaultSittingKeepCount,
+    Set<String> protect = const {},
+    DateTime? now,
+  }) async {
+    final today = now ?? DateTime.now();
+    final cutoff = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(days: recentSittingProtectionDays));
+    final dir = await _directory();
+    final pattern = RegExp(r'^sitting_(\d{4}-\d{2}-\d{2})\.db$');
+    final entries = <({String path, String date, DateTime used})>[];
+    await for (final entity in dir.list()) {
+      if (entity is! File) continue;
+      final match = pattern.firstMatch(p.basename(entity.path));
+      if (match == null) continue;
+      entries.add((
+        path: entity.path,
+        date: match.group(1)!,
+        used: entity.lastModifiedSync(),
+      ));
+    }
+    if (entries.length <= keep) return 0;
+
+    entries.sort((a, b) => b.used.compareTo(a.used));
+    var deleted = 0;
+    for (final entry in entries.skip(keep)) {
+      if (protect.contains(entry.date)) continue;
+      final day = DateTime.tryParse(entry.date);
+      if (day == null || !day.isBefore(cutoff)) continue;
+      await deleteDatabase(entry.path);
+      deleted++;
+    }
+    return deleted;
   }
 
   // ─── Sitting DB ───────────────────────────────────────────────────────────
