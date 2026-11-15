@@ -1,4 +1,4 @@
-Every word said in Parliament, in your pocket.
+Every word said in Parliament, in your pocket. Free, with no ads, and open source.
 
 Open Parliament turns the official record of the House of Commons and House of Lords into a fast, readable app. Read debates exactly as they were spoken, see who said what, check how your MP voted, and follow new laws from first reading to Royal Assent.
 
@@ -29,6 +29,9 @@ BUILT FOR READING
 • Save speeches and share quotes
 • Days you have opened stay on your phone, so you can read them offline
 • No account and no ads
+
+FREE AND OPEN SOURCE
+Open Parliament is free, has no ads and no subscriptions. The full source code is public under the MIT licence, so anyone can check how it works or help improve it: https://github.com/MaybeItsSoftware/open-parliament
 
 DATA SOURCES
 Open Parliament shows public data from official UK Parliament services: Hansard (hansard.parliament.uk), the Members API, the Bills API and parliamentlive.tv. Contains Parliamentary information licensed under the Open Parliament Licence v3.0.

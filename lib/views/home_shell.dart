@@ -19,7 +19,11 @@ import 'standing_orders_view.dart';
 /// System back on any tab other than Debates returns to Debates rather than
 /// closing the app.
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  const HomeShell({super.key, this.initialIndex = 0});
+
+  /// Tab to open on (0 Debates, 1 Search, 2 Bills, 3 Map). Used by the store
+  /// screenshot generator; the app always starts on Debates.
+  final int initialIndex;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -29,8 +33,8 @@ class _HomeShellState extends State<HomeShell> {
   static const int _debatesIndex = 0;
   static const int _moreIndex = 4;
 
-  int _index = _debatesIndex;
-  final Set<int> _visited = {_debatesIndex};
+  late int _index = widget.initialIndex.clamp(0, _moreIndex - 1);
+  late final Set<int> _visited = {_index};
 
   static Widget _tabBody(int index) {
     switch (index) {
