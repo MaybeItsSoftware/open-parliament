@@ -84,6 +84,9 @@ platform :ios do
       # Screenshots live in fastlane/screenshots/. Set to true to skip.
       skip_screenshots:    false,
       screenshots_path:    File.join(__dir__, "screenshots"),
+      # Replace the live set rather than appending to it, so a reshoot
+      # doesn't leave old screenshots alongside the new ones.
+      overwrite_screenshots: true,
       submit_for_review:   true,
       # Release manually after Apple approves, so you control the rollout moment.
       automatic_release:   false,

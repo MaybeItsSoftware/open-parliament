@@ -21,9 +21,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
+      # Promotion builds nothing (the binary is already uploaded), so take
+      # store metadata, screenshots and lane config from main rather than the
+      # tag: listing fixes made after a release then still go out with it.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.version }}
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -50,9 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Promotion builds nothing (the binary is already uploaded), so take
+      # store metadata, screenshots and lane config from main rather than the
+      # tag: listing fixes made after a release then still go out with it.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.version }}
 
       - name: Set up Ruby + Fastlane
         uses: ruby/setup-ruby@v1
