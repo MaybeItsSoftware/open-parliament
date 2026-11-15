@@ -188,7 +188,7 @@ class _SearchViewState extends State<SearchView> {
           _debateTile(context, debate: debate),
       ],
       footer: results.debates.isNotEmpty
-          ? 'Debates are searched from cached sittings only.'
+          ? 'Matches debate titles across Hansard, newest first.'
           : null,
     );
 
