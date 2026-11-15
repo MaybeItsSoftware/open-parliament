@@ -125,10 +125,12 @@ class MembersApiService {
   /// Returns an empty list on network failure (caller decides on retry logic).
   Future<List<Member>> fetchAllMembers() async {
     const int pageSize = 100;
-    int skip = 0;
-    final List<Member> members = [];
+    // The first page reports the total; the remaining pages (~73 for both
+    // Houses) are then fetched several at a time instead of one after another,
+    // which was a long serial chain of round trips on first launch.
+    const int concurrency = 8;
 
-    while (true) {
+    Future<Map<String, dynamic>?> fetchPage(int skip) async {
       final uri = Uri.parse(
         '$_baseUrl/Search?skip=$skip&take=$pageSize&IsCurrentMember=true',
       );
@@ -136,18 +138,13 @@ class MembersApiService {
         uri,
         headers: {'Accept': 'application/json'},
       );
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
 
-      if (response.statusCode != 200) {
-        break;
-      }
-
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final items = body['items'] as List<dynamic>? ?? [];
-
-      if (items.isEmpty) {
-        break;
-      }
-
+    final members = <Member>[];
+    void addItems(Map<String, dynamic>? body) {
+      final items = body?['items'] as List<dynamic>? ?? const [];
       for (final item in items) {
         try {
           members.add(Member.fromApiJson(item as Map<String, dynamic>));
@@ -155,14 +152,23 @@ class MembersApiService {
           // Skip malformed individual records.
         }
       }
-
-      final totalResults = (body['totalResults'] as num?)?.toInt() ?? 0;
-      skip += items.length;
-      if (totalResults > 0 && skip >= totalResults) {
-        break;
-      }
     }
 
+    final first = await fetchPage(0);
+    if (first == null) return members;
+    addItems(first);
+    final total = (first['totalResults'] as num?)?.toInt() ?? 0;
+    // Step by what the first page actually held: the API may cap `take`
+    // below what we asked for.
+    final step = (first['items'] as List<dynamic>? ?? const []).length;
+    if (step == 0) return members;
+    final remaining = [for (var skip = step; skip < total; skip += step) skip];
+    for (var i = 0; i < remaining.length; i += concurrency) {
+      final pages = await Future.wait(
+        remaining.skip(i).take(concurrency).map(fetchPage),
+      );
+      pages.forEach(addItems);
+    }
     return members;
   }
 

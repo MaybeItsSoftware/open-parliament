@@ -24,18 +24,17 @@ Future<void> main() async {
   await dotenv.load(fileName: 'assets/env/.env', isOptional: true);
   final sentryDsn = dotenv.env['SENTRY_DSN'] ?? '';
 
-  final rootDirectory = await getApplicationSupportDirectory();
-  await FMTCObjectBoxBackend().initialise(rootDirectory: rootDirectory.path);
-  await const FMTCStore(cartoLightCacheName).manage.create();
-  await const FMTCStore(cartoBaseCacheName).manage.create();
-  await const FMTCStore(cartoLabelsCacheName).manage.create();
-
   final themeService = ThemeService();
-  await themeService.load();
   final savedSpeechesService = SavedSpeechesService();
-  await savedSpeechesService.load();
   final startupPrefetchService = StartupPrefetchService();
-  await startupPrefetchService.load();
+  // Independent of each other, so run concurrently: everything here delays
+  // the first frame.
+  await Future.wait([
+    _initMapTileCache(),
+    themeService.load(),
+    savedSpeechesService.load(),
+    startupPrefetchService.load(),
+  ]);
 
   if (sentryDsn.isNotEmpty) {
     await SentryFlutter.init(
@@ -61,6 +60,17 @@ Future<void> main() async {
       startupPrefetchService: startupPrefetchService,
     );
   }
+}
+
+/// Opens the on-disk map tile cache and its stores.
+Future<void> _initMapTileCache() async {
+  final rootDirectory = await getApplicationSupportDirectory();
+  await FMTCObjectBoxBackend().initialise(rootDirectory: rootDirectory.path);
+  await Future.wait([
+    const FMTCStore(cartoLightCacheName).manage.create(),
+    const FMTCStore(cartoBaseCacheName).manage.create(),
+    const FMTCStore(cartoLabelsCacheName).manage.create(),
+  ]);
 }
 
 /// Launches the widget tree and kicks off optional startup prefetch.

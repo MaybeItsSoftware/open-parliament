@@ -55,6 +55,12 @@ class ParliamentaryDataService {
   DateTime? _comingUpBillsCachedAt;
   final Map<String, Future<List<Speech>>> _speechesInFlight = {};
 
+  /// Members held in memory after the first read. The debates feed and every
+  /// transcript ask for the full roster (~1,400 rows); re-reading it from
+  /// SQLite each time meant a large platform-channel copy per screen.
+  List<Member>? _membersMemo;
+  Future<List<Member>>? _membersInFlight;
+
   ParliamentaryDataService({
     DatabaseService? databaseService,
     MembersApiService? membersApiService,
@@ -254,7 +260,16 @@ class ParliamentaryDataService {
     );
   }
 
-  Future<List<Member>> getMembers() async {
+  Future<List<Member>> getMembers() {
+    final memo = _membersMemo;
+    if (memo != null) return Future.value(memo);
+    return _membersInFlight ??= _loadMembers().then((members) {
+      if (members.isNotEmpty) _membersMemo = members;
+      return members;
+    }).whenComplete(() => _membersInFlight = null);
+  }
+
+  Future<List<Member>> _loadMembers() async {
     final db = await _db.openMembersDb();
     if (await _isMembersCacheFresh(db)) {
       return _loadMembersFromDb(db);
@@ -301,21 +316,21 @@ class ParliamentaryDataService {
 
     final db = await _db.openMembersDb();
     final now = DateTime.now().toUtc().millisecondsSinceEpoch;
-    await db.transaction((txn) async {
-      for (final entry in aliasToMemberId.entries) {
-        final key = entry.key.trim();
-        if (key.isEmpty) continue;
-        await txn.insert(
-          'speaker_aliases',
-          {
-            'alias_key': key,
-            'member_id': entry.value,
-            'updated_at': now,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-    });
+    final batch = db.batch();
+    for (final entry in aliasToMemberId.entries) {
+      final key = entry.key.trim();
+      if (key.isEmpty) continue;
+      batch.insert(
+        'speaker_aliases',
+        {
+          'alias_key': key,
+          'member_id': entry.value,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   /// Speeches for the sitting on [date] (YYYY-MM-DD), local-first.
@@ -438,6 +453,14 @@ class ParliamentaryDataService {
         member.toDb(),
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      final memo = _membersMemo;
+      if (memo != null) {
+        _membersMemo = [
+          for (final m in memo)
+            if (m.id != member.id) m,
+          member,
+        ];
+      }
       return member;
     } catch (_) {
       return null;
@@ -523,12 +546,11 @@ class ParliamentaryDataService {
   /// [year] across both houses, fetched in one request per house via the
   /// Hansard calendar endpoint.
   Future<Set<DateTime>> getSittingDates(int year, int month) async {
-    final result = <DateTime>{};
-    for (final house in const ['Commons', 'Lords']) {
-      final dates = await _hansardApi.fetchSittingCalendar(year, month, house);
-      result.addAll(dates);
-    }
-    return result;
+    final perHouse = await Future.wait([
+      for (final house in const ['Commons', 'Lords'])
+        _hansardApi.fetchSittingCalendar(year, month, house),
+    ]);
+    return {for (final dates in perHouse) ...dates};
   }
 
   /// Returns the named non-sitting periods (recesses, holiday adjournments,
@@ -537,15 +559,15 @@ class ParliamentaryDataService {
   Future<List<RecessPeriod>> getRecessPeriods(int year, int month) async {
     final firstDay = _formatCalendarDate(DateTime(year, month, 1));
     final lastDay = _formatCalendarDate(DateTime(year, month + 1, 0));
-    final result = <RecessPeriod>[];
-    for (final house in const ['Commons', 'Lords']) {
-      result.addAll(await _whatsOnApi.fetchNonSittingPeriods(
-        startDate: firstDay,
-        endDate: lastDay,
-        house: house,
-      ));
-    }
-    return result;
+    final perHouse = await Future.wait([
+      for (final house in const ['Commons', 'Lords'])
+        _whatsOnApi.fetchNonSittingPeriods(
+          startDate: firstDay,
+          endDate: lastDay,
+          house: house,
+        ),
+    ]);
+    return [for (final periods in perHouse) ...periods];
   }
 
   static String _formatCalendarDate(DateTime day) =>
@@ -578,26 +600,27 @@ class ParliamentaryDataService {
       return _loadMembersFromDb(db);
     }
 
-    await db.transaction((txn) async {
-      await txn.delete('members');
-
-      for (final m in members) {
-        await txn.insert(
-          'members',
-          m.toDb(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-
-      await txn.insert(
-        'meta',
-        {
-          'key': 'last_fetched',
-          'value': DateTime.now().toUtc().millisecondsSinceEpoch.toString(),
-        },
+    // One batch (a single transaction and platform-channel call) rather than
+    // one awaited insert per member: on a phone each await is a round trip
+    // to the native SQLite plugin, which made the first launch crawl.
+    final batch = db.batch();
+    batch.delete('members');
+    for (final m in members) {
+      batch.insert(
+        'members',
+        m.toDb(),
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-    });
+    }
+    batch.insert(
+      'meta',
+      {
+        'key': 'last_fetched',
+        'value': DateTime.now().toUtc().millisecondsSinceEpoch.toString(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await batch.commit(noResult: true);
 
     return members;
   }
@@ -643,35 +666,37 @@ class ParliamentaryDataService {
     List<Speech> speeches,
   ) async {
     final db = await _db.openSittingDb(date);
-    await db.transaction((txn) async {
-      // A legacy-cache refresh re-persists the whole day; clear first so
-      // rows that no longer exist upstream don't linger.
-      await txn.delete('speeches');
-      await txn.delete('debates');
-      for (final d in debates) {
-        await txn.insert(
-          'debates',
-          d.toDb(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-
-      for (final s in speeches) {
-        await txn.insert(
-          'speeches',
-          s.toDb(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-      await txn.insert(
-        'meta',
-        {
-          'key': 'fetched_at',
-          'value': '${DateTime.now().millisecondsSinceEpoch}',
-        },
+    // A busy day is thousands of speech rows. Committing them as one batch
+    // (atomic, like the transaction it replaces) is a single native call
+    // instead of one per row, which dominated first-open time on phones.
+    final batch = db.batch();
+    // A refresh re-persists the whole day; clear first so rows that no
+    // longer exist upstream don't linger.
+    batch.delete('speeches');
+    batch.delete('debates');
+    for (final d in debates) {
+      batch.insert(
+        'debates',
+        d.toDb(),
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-    });
+    }
+    for (final s in speeches) {
+      batch.insert(
+        'speeches',
+        s.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    batch.insert(
+      'meta',
+      {
+        'key': 'fetched_at',
+        'value': '${DateTime.now().millisecondsSinceEpoch}',
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await batch.commit(noResult: true);
   }
 
   Future<List<Speech>> _loadSpeechesFromDb(String date) async {
@@ -699,7 +724,10 @@ class ParliamentaryDataService {
   }
 
   /// Clears cached MP profiles, forcing a re-fetch on next read.
-  Future<int> clearCachedMembers() => _db.wipeMembersCache();
+  Future<int> clearCachedMembers() {
+    _membersMemo = null;
+    return _db.wipeMembersCache();
+  }
 
   /// Clears cached bills and laws data. Returns the number of items cleared.
   int clearBillsCache() {
