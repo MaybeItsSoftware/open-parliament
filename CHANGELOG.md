@@ -1,3 +1,22 @@
+# [0.10.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.9.0...v0.10.0) (2026-11-15)
+
+
+### Bug Fixes
+
+* **search:** footnote no longer claims debates come from cached days only ([8d70bee](https://github.com/MaybeItsSoftware/open-parliament/commit/8d70bee46ee2f9e4af3cc34a83511bd527e7aa1e))
+
+
+### Features
+
+* **cache:** evict least recently used sitting days; test the data layer ([c68616f](https://github.com/MaybeItsSoftware/open-parliament/commit/c68616f700af281e8d577b68ee4f4718fca6cec6))
+* **nav:** bottom navigation shell, cached-first debate feed, concurrent search ([09dd6e9](https://github.com/MaybeItsSoftware/open-parliament/commit/09dd6e9657de23575e3203825f0f37a0ce490a56))
+* **transcripts:** add per-speech "Watch from here" parliamentlive deep-link ([10b29bb](https://github.com/MaybeItsSoftware/open-parliament/commit/10b29bb8ee2c2ee9252d10d285a70a98f116c30a))
+
+
+### Performance Improvements
+
+* batch SQLite writes, parallel member pages, memoised roster ([6d38840](https://github.com/MaybeItsSoftware/open-parliament/commit/6d388400f1bf0c29a4b6a4e4ff3730ebb96223fa))
+
 # [0.9.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.8.2...v0.9.0) (2026-09-04)
 
 
