@@ -114,3 +114,7 @@ flutter build windows --release
 # Linux (requires build-essential, clang, cmake, ninja-build, libgtk-3-dev)
 flutter build linux --release
 ```
+
+## Licence
+
+MIT. See [LICENSE](./LICENSE). Parliamentary data is used under the [Open Parliament Licence v3.0](https://www.parliament.uk/site-information/copyright-parliament/open-parliament-licence/).
