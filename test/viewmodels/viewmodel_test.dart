@@ -27,6 +27,26 @@ import 'package:open_parliament/viewmodels/transcript_viewmodel.dart';
 // ─── Manual mocks ──────────────────────────────────────────────────────────
 
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
+
+  List<Speech>? cachedSpeechesResult;
+
+  @override
+  Future<List<Speech>?> getCachedSpeeches(String date) async =>
+      cachedSpeechesResult;
+  List<Map<String, dynamic>> hansardDebateResults = const [];
+  Object? hansardSearchError;
+
+  @override
+  Future<void> refreshSitting(String date) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> searchHansardDebates(
+    String query, {
+    int limit = 20,
+  }) async {
+    if (hansardSearchError != null) throw hansardSearchError!;
+    return hansardDebateResults;
+  }
   bool isCachedResult = false;
   bool hasSittingDataResult = true;
   DateTime? previousSittingDateResult;
@@ -927,6 +947,17 @@ void main() {
         expect(fakeService.getRecessPeriodsCalls, 0);
       });
 
+      test('a failed load is reported, not shown as "no debates"', () async {
+        fakeService.speechesError = Exception('offline');
+
+        final result =
+            await vm.loadDebateFeedWithStatus(today, isToday: true);
+
+        expect(result.items, isEmpty);
+        expect(result.loadFailed, isTrue);
+        expect(result.isPendingPublication, isFalse);
+      });
+
       test('empty feed for a non-today day skips the recess check',
           () async {
         final result =
@@ -1405,6 +1436,38 @@ void main() {
       expect(vm.error, isNull);
     });
 
+    test('shows the saved copy first, then applies newly published rows',
+        () async {
+      fakeService.cachedSpeechesResult = [
+        makeSpeech(id: 's1', memberName: 'Alice'),
+      ];
+      fakeService.speechesResult = [
+        makeSpeech(id: 's1', memberName: 'Alice'),
+        makeSpeech(id: 's2', memberName: 'Bob', orderIndex: 1),
+      ];
+      fakeService.speechesDelay = const Duration(milliseconds: 20);
+
+      final load = vm.loadSpeeches();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(vm.isLoading, isFalse);
+      expect(vm.speeches, hasLength(1));
+
+      await load;
+      expect(vm.speeches, hasLength(2));
+    });
+
+    test('keeps the saved copy when the re-check fails', () async {
+      fakeService.cachedSpeechesResult = [
+        makeSpeech(id: 's1', memberName: 'Alice'),
+      ];
+      fakeService.speechesError = Exception('offline');
+
+      await vm.loadSpeeches();
+
+      expect(vm.speeches, hasLength(1));
+      expect(vm.error, isNull);
+    });
+
     test('loadSpeeches sets error on exception', () async {
       fakeService.speechesError = Exception('Network error');
 
@@ -1413,6 +1476,43 @@ void main() {
       expect(vm.error, isNotNull);
       expect(vm.speeches, isEmpty);
       expect(vm.isLoading, isFalse);
+    });
+
+    test('initialDebateId naming a sub-debate shows just that section',
+        () async {
+      fakeService.debatesForDateBuilder = (_) => const [
+            Debate(
+              id: 'ROOT',
+              title: 'Oral Answers',
+              house: 'Commons',
+              orderIndex: 0,
+            ),
+          ];
+      Speech inSection(String id, String debateId, String name, int order) =>
+          Speech(
+            id: id,
+            debateId: debateId,
+            debateTitle: 'Oral Answers',
+            rootDebateId: 'ROOT',
+            memberName: name,
+            attributedTo: name,
+            speechText: 'Question text.',
+            orderIndex: order,
+          );
+      fakeService.speechesResult = [
+        inSection('s1', 'CHILD-A', 'Alice', 0),
+        inSection('s2', 'CHILD-B', 'Bob', 1),
+      ];
+
+      final sectionVm = TranscriptViewModel(
+        fakeService,
+        date: testDate,
+        initialDebateId: 'child-b',
+      );
+      await sectionVm.loadSpeeches();
+
+      expect(sectionVm.speeches.map((s) => s.id), ['s2']);
+      sectionVm.dispose();
     });
 
     test('loadSpeeches does not notify after dispose', () async {
@@ -2310,6 +2410,56 @@ void main() {
     });
 
     tearDown(() => vm.dispose());
+
+    test('merges cached and Hansard-wide debates, newest first, deduped',
+        () async {
+      fakeService.cachedDebateResults = [
+        {
+          'debateId': 'abc',
+          'title': 'Water Bill',
+          'house': 'Commons',
+          'date': '2024-01-10',
+        },
+      ];
+      fakeService.hansardDebateResults = [
+        {
+          'debateId': 'ABC',
+          'title': 'Water Bill',
+          'house': 'Commons',
+          'date': '2024-01-10',
+        },
+        {
+          'debateId': 'XYZ',
+          'title': 'Water Quality',
+          'house': 'Lords',
+          'date': '2025-03-01',
+        },
+      ];
+
+      await vm.searchNow('water');
+
+      expect(
+        vm.results.debates.map((d) => d.debateId),
+        ['XYZ', 'abc'],
+      );
+      expect(vm.error, isNull);
+    });
+
+    test('keeps cached debates when Hansard search fails', () async {
+      fakeService.cachedDebateResults = [
+        {
+          'debateId': 'abc',
+          'title': 'Water Bill',
+          'house': 'Commons',
+          'date': '2024-01-10',
+        },
+      ];
+      fakeService.hansardSearchError = Exception('offline');
+
+      await vm.searchNow('water');
+
+      expect(vm.results.debates, hasLength(1));
+    });
 
     test('searches members and constituencies separately', () async {
       fakeService.membersResult = const [

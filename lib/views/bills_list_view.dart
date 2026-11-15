@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/house_colors.dart';
 import '../viewmodels/bills_list_viewmodel.dart';
-import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'bills_timeline_view.dart';
 
@@ -102,7 +101,6 @@ class _BillsListViewState extends State<BillsListView> {
           ),
         ],
       ),
-      drawer: const AppDrawer(current: AppDestination.bills),
       body: ChangeNotifierProvider.value(
         value: _vm,
         child: Consumer<BillsListViewModel>(

@@ -13,7 +13,6 @@ import '../utils/speech_timecodes.dart';
 import '../utils/standing_order_helpers.dart';
 import '../viewmodels/date_selector_viewmodel.dart';
 import '../widgets/sitting_day_calendar.dart';
-import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'transcript_view.dart';
 
@@ -58,6 +57,89 @@ class _DateSelectorViewState extends State<DateSelectorView> {
   /// Which chamber's debates to show in the feed below.
   _ChamberFilter _chamberFilter = _ChamberFilter.all;
 
+  /// The feed load for [_feedDay], kept across rebuilds so toggling the
+  /// chamber filter (or any view-model notification) doesn't re-assemble the
+  /// day and flash a spinner.
+  Future<DebateFeedResult>? _feedFuture;
+  DateTime? _feedDay;
+
+  /// Set while [_feedFuture] holds the result of a pull-to-refresh, so the
+  /// previous result stays on screen instead of a spinner for that frame.
+  bool _feedIsRefresh = false;
+
+  Future<DebateFeedResult> _feedFor(
+    DateSelectorViewModel vm,
+    DateTime day, {
+    required bool isToday,
+  }) {
+    if (_feedFuture == null || _feedDay != day) {
+      _feedDay = day;
+      _feedIsRefresh = false;
+      _feedFuture = _loadFeed(vm, day, isToday: isToday);
+    }
+    return _feedFuture!;
+  }
+
+  /// Resolves with the saved copy when there is one, then swaps in the
+  /// re-checked feed if the data service fetched anything new — so a day
+  /// that's still publishing opens instantly instead of waiting on Hansard.
+  Future<DebateFeedResult> _loadFeed(
+    DateSelectorViewModel vm,
+    DateTime day, {
+    required bool isToday,
+  }) async {
+    final cached = await vm.loadCachedDebateFeed(day);
+    if (cached == null) {
+      return vm.loadDebateFeedWithStatus(day, isToday: isToday);
+    }
+    unawaited(
+      vm.loadDebateFeedWithStatus(day, isToday: isToday).then((fresh) {
+        if (!mounted || _feedDay != day || fresh.loadFailed) return;
+        if (fresh.items.length == cached.items.length &&
+            _sameFeedStats(fresh.items, cached.items)) {
+          return;
+        }
+        setState(() {
+          _feedIsRefresh = true;
+          _feedFuture = Future.value(fresh);
+        });
+      }),
+    );
+    return cached;
+  }
+
+  static bool _sameFeedStats(List<DebateFeedItem> a, List<DebateFeedItem> b) {
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].debateId != b[i].debateId ||
+          a[i].contributionCount != b[i].contributionCount) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _refreshFeed(DateSelectorViewModel vm, DateTime day) async {
+    final now = DateTime.now();
+    final isToday = day.isAtSameMomentAs(
+      DateTime(now.year, now.month, now.day),
+    );
+    try {
+      await vm.refreshDay(day);
+    } catch (_) {
+      if (mounted) {
+        _showInfoMessage('Couldn’t reach Hansard. Showing saved copy.');
+      }
+    }
+    final result = await vm.loadDebateFeedWithStatus(day, isToday: isToday);
+    if (!mounted || _feedDay != day) return;
+    setState(() {
+      _feedIsRefresh = true;
+      _feedFuture = Future.value(result);
+    });
+  }
+
+  void _retryFeed() => setState(() => _feedFuture = null);
+
   @override
   void initState() {
     super.initState();
@@ -92,7 +174,6 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         builder: (context, vm, _) {
           final selectedDay = vm.selectedDay ?? vm.focusedDay;
           return Scaffold(
-            drawer: const AppDrawer(current: AppDestination.debates),
             body: SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -144,27 +225,13 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     );
   }
 
-  /// Inline top bar: the drawer button sits outside the date-selector box's
-  /// tinted background.
+  /// Inline top bar: the sitting-day stepper.
   Widget _buildTopBar(
     BuildContext context,
     DateSelectorViewModel vm,
     DateTime selectedDay,
   ) {
-    return Row(
-      children: [
-        Builder(
-          builder:
-              (context) => IconButton(
-                icon: const Icon(Icons.menu),
-                tooltip: 'Menu',
-                onPressed: () => Scaffold.of(context).openDrawer(),
-              ),
-        ),
-        const SizedBox(width: 4),
-        Expanded(child: _buildContextualDateSelector(context, vm, selectedDay)),
-      ],
-    );
+    return _buildContextualDateSelector(context, vm, selectedDay);
   }
 
   Widget _buildContextualDateSelector(
@@ -177,7 +244,7 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final canMoveForward = !selectedDay.isAtSameMomentAs(today);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(10),
@@ -186,15 +253,20 @@ class _DateSelectorViewState extends State<DateSelectorView> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left),
+            tooltip: 'Previous sitting day',
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             onPressed: () => unawaited(_shiftBySittingDay(vm, selectedDay, -1)),
           ),
           Expanded(
-            child: GestureDetector(
+            child: InkWell(
+              // InkWell (not GestureDetector) so the tap shows feedback and
+              // screen readers announce the date as tappable.
+              borderRadius: BorderRadius.circular(8),
               onTap: () => _pickDate(vm, selectedDay),
-              behavior: HitTestBehavior.opaque,
-              child: Row(
+              child: SizedBox(
+                height: 48,
+                child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -215,12 +287,14 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                   ),
                 ],
               ),
+              ),
             ),
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
+            tooltip: 'Next sitting day',
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             onPressed:
                 canMoveForward
                     ? () => unawaited(_shiftBySittingDay(vm, selectedDay, 1))
@@ -287,18 +361,25 @@ class _DateSelectorViewState extends State<DateSelectorView> {
     final today = DateTime(now.year, now.month, now.day);
     final isToday = day.isAtSameMomentAs(today);
     return FutureBuilder<DebateFeedResult>(
-      future: vm.loadDebateFeedWithStatus(day, isToday: isToday),
+      future: _feedFor(vm, day, isToday: isToday),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !(_feedIsRefresh && snapshot.hasData)) {
           return const Center(child: CircularProgressIndicator());
         }
 
         final result = snapshot.data;
         final items = result?.items ?? const <DebateFeedItem>[];
         if (items.isEmpty) {
-          return (result?.isPendingPublication ?? false)
-              ? _buildPendingPublicationCard(vm, day)
-              : _buildNoDebatesCard(day);
+          final Widget card;
+          if (result == null || result.loadFailed) {
+            card = _buildLoadFailedCard(day);
+          } else if (result.isPendingPublication) {
+            card = _buildPendingPublicationCard(vm, day);
+          } else {
+            card = _buildNoDebatesCard(day);
+          }
+          return _refreshable(vm, day, _scrollableCentered(card));
         }
 
         final filteredItems =
@@ -313,7 +394,11 @@ class _DateSelectorViewState extends State<DateSelectorView> {
                     )
                     .toList();
         if (filteredItems.isEmpty) {
-          return _buildNoChamberDebatesCard(_chamberFilter);
+          return _refreshable(
+            vm,
+            day,
+            _scrollableCentered(_buildNoChamberDebatesCard(_chamberFilter)),
+          );
         }
 
         final rows = _buildFeedRows(
@@ -321,11 +406,62 @@ class _DateSelectorViewState extends State<DateSelectorView> {
           result?.sessions ?? const <SittingSession>[],
           day,
         );
-        return ListView.builder(
-          itemCount: rows.length,
-          itemBuilder: (context, index) => rows[index],
+        return _refreshable(
+          vm,
+          day,
+          ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: rows.length,
+            itemBuilder: (context, index) => rows[index],
+          ),
         );
       },
+    );
+  }
+
+  Widget _refreshable(DateSelectorViewModel vm, DateTime day, Widget child) {
+    return RefreshIndicator(
+      onRefresh: () => _refreshFeed(vm, day),
+      child: child,
+    );
+  }
+
+  /// Centres [child] in a scroll view that always scrolls, so empty and
+  /// error states can still be pulled to refresh.
+  Widget _scrollableCentered(Widget child) {
+    return LayoutBuilder(
+      builder:
+          (context, constraints) => SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(child: child),
+            ),
+          ),
+    );
+  }
+
+  Widget _buildLoadFailedCard(DateTime day) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Couldn’t load debates for ${_friendlyDate(day)}.\n'
+              'Check your connection and try again.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _retryFeed,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

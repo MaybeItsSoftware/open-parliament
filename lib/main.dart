@@ -14,7 +14,7 @@ import 'services/startup_prefetch_service.dart';
 import 'services/theme_service.dart';
 import 'services/party_service.dart';
 import 'utils/map_tiles.dart';
-import 'views/date_selector_view.dart';
+import 'views/home_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -146,7 +146,7 @@ class OpenParliamentApp extends StatelessWidget {
                 useMaterial3: true,
                 appBarTheme: const AppBarTheme(centerTitle: true, elevation: 2),
               ),
-              home: const DateSelectorView(),
+              home: const HomeShell(),
             ),
       ),
     );

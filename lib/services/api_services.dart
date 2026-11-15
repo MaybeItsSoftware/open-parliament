@@ -501,22 +501,45 @@ class HansardApiService {
     String debateTitle, {
     int startOrderIndex = 0,
   }) async {
+    final body = await fetchDebateJson(debateId);
+    if (body == null) return const <Speech>[];
+    return parseDebateSpeeches(
+      body,
+      debateId,
+      debateTitle,
+      startOrderIndex: startOrderIndex,
+    );
+  }
+
+  /// Fetches the raw debate tree for [debateId], or `null` on 404.
+  ///
+  /// Split from [parseDebateSpeeches] so a whole day's debates can be
+  /// downloaded concurrently while still being parsed in document order —
+  /// the running order index (and therefore fallback speech ids) depends on
+  /// every earlier debate's item count.
+  Future<Map<String, dynamic>?> fetchDebateJson(String debateId) async {
     final uri = Uri.parse('$_baseUrl/debates/debate/$debateId.json');
     final response = await _client.getTimed(
       uri,
       headers: {'Accept': 'application/json'},
     );
 
-    if (response.statusCode == 404) {
-      return const <Speech>[];
-    }
+    if (response.statusCode == 404) return null;
     if (response.statusCode != 200) {
       throw HansardApiException(
         'Failed to fetch debate $debateId: HTTP ${response.statusCode}',
       );
     }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
 
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+  /// Parses a debate tree fetched by [fetchDebateJson] into speeches.
+  List<Speech> parseDebateSpeeches(
+    Map<String, dynamic> body,
+    String debateId,
+    String debateTitle, {
+    int startOrderIndex = 0,
+  }) {
     final speeches = <Speech>[];
     int orderIndex = startOrderIndex;
 
@@ -573,6 +596,64 @@ class HansardApiService {
       fallbackDebateTitle: debateTitle,
     );
     return speeches;
+  }
+
+  /// Searches debate titles across the whole of Hansard via
+  /// `/search/debates.json`, newest sittings first.
+  ///
+  /// Returns maps with keys: debateId, title, house, section, date
+  /// (YYYY-MM-DD) — the same shape as the local cached-title search, so the
+  /// two can be merged.
+  Future<List<Map<String, dynamic>>> searchDebates(
+    String query, {
+    int take = 20,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const [];
+    final uri = Uri.parse('$_baseUrl/search/debates.json').replace(
+      queryParameters: {
+        'queryParameters.searchTerm': trimmed,
+        'queryParameters.take': '$take',
+        'queryParameters.orderBy': 'SittingDateDesc',
+      },
+    );
+    final response = await _client.getTimed(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw HansardApiException(
+        'Debate search failed: HTTP ${response.statusCode}',
+      );
+    }
+    return parseDebateSearch(response.body);
+  }
+
+  /// Parses a `/search/debates.json` body. Exposed for tests.
+  static List<Map<String, dynamic>> parseDebateSearch(String body) {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) return const [];
+    final results = decoded['Results'];
+    if (results is! List) return const [];
+    final out = <Map<String, dynamic>>[];
+    for (final r in results) {
+      if (r is! Map<String, dynamic>) continue;
+      final id = (r['DebateSectionExtId'] as String?)?.trim() ?? '';
+      final title = (r['Title'] as String?)?.trim() ?? '';
+      final rawDate = r['SittingDate'] as String?;
+      final date = rawDate != null && rawDate.length >= 10
+          ? rawDate.substring(0, 10)
+          : '';
+      if (id.isEmpty || title.isEmpty || date.isEmpty) continue;
+      out.add({
+        'debateId': id,
+        'title': title,
+        'house': (r['House'] as String?) ?? '',
+        'section': r['DebateSection'] as String?,
+        'date': date,
+      });
+    }
+    return out;
   }
 
   /// Returns the nearest previous and next sitting dates around [date].

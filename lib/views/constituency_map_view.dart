@@ -13,7 +13,6 @@ import '../utils/council_control.dart';
 import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/constituency_map_viewmodel.dart';
-import 'app_drawer.dart';
 import 'constituency_view.dart';
 import 'council_view.dart';
 import 'member_view.dart';
@@ -420,7 +419,6 @@ class _ConstituencyMapViewState extends State<ConstituencyMapView>
                 ),
               ),
             ),
-            drawer: const AppDrawer(current: AppDestination.map),
             body: Stack(
               children: [
                 FlutterMap(

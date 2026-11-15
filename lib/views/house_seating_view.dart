@@ -8,7 +8,6 @@ import '../models/member.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/house_seating_viewmodel.dart';
-import 'app_drawer.dart';
 import 'member_view.dart';
 
 /// Chamber seating view for the House of Commons and House of Lords.
@@ -94,7 +93,6 @@ class _HouseSeatingViewState extends State<HouseSeatingView> {
                 ),
               ),
             ),
-            drawer: const AppDrawer(current: AppDestination.seating),
             body: vm.isLoading && vm.seats.isEmpty
                 ? const Center(child: CircularProgressIndicator())
                 : vm.error != null

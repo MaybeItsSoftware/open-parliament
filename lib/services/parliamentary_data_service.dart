@@ -30,6 +30,13 @@ const Duration _billsListCacheTtl = Duration(minutes: 30);
 /// parallelism keeps throughput without starving requests.
 const int _billDetailConcurrency = 5;
 
+/// How many of a sitting day's debates to download at once. A busy day has
+/// 60+ roots; fetching them one by one made the first open of a day slow.
+const int _debateFetchConcurrency = 6;
+
+/// Minimum gap between re-checks of a sitting that may still be publishing.
+const Duration _recentSittingRecheck = Duration(minutes: 30);
+
 /// The high-level service that coordinates API calls with local SQLite caches.
 class ParliamentaryDataService {
   final DatabaseService _db;
@@ -46,6 +53,7 @@ class ParliamentaryDataService {
   DateTime? _recentBillsCachedAt;
   List<Map<String, dynamic>>? _comingUpBillsCache;
   DateTime? _comingUpBillsCachedAt;
+  final Map<String, Future<List<Speech>>> _speechesInFlight = {};
 
   ParliamentaryDataService({
     DatabaseService? databaseService,
@@ -310,22 +318,84 @@ class ParliamentaryDataService {
     });
   }
 
-  Future<List<Speech>> getSpeeches(String date) async {
+  /// Speeches for the sitting on [date] (YYYY-MM-DD), local-first.
+  ///
+  /// A cached day is served as-is unless it may have been cached before
+  /// Hansard finished publishing it (see [_isSittingCacheStale]), in which
+  /// case it is re-fetched, falling back to the cached rows when offline.
+  /// Concurrent calls for the same date share one fetch.
+  Future<List<Speech>> getSpeeches(String date) {
+    final inflight = _speechesInFlight[date];
+    if (inflight != null) return inflight;
+    final future = _getSpeechesUncoalesced(date);
+    _speechesInFlight[date] = future;
+    return future.whenComplete(() => _speechesInFlight.remove(date));
+  }
+
+  Future<List<Speech>> _getSpeechesUncoalesced(String date) async {
     final alreadyCached = await _db.sittingDbExists(date);
-    if (alreadyCached) {
-      final cached = await _loadSpeechesFromDb(date);
-      // Rows cached before root_debate_id existed can't be grouped by root
-      // debate — re-fetch the day once to backfill, keeping the stale rows
-      // as an offline fallback.
-      final isLegacy = cached.any((s) => s.rootDebateId == null);
-      if (!isLegacy) return cached;
-      try {
-        return await _fetchAndCacheSitting(date);
-      } catch (_) {
-        return cached;
-      }
+    if (!alreadyCached) return _fetchAndCacheSitting(date);
+
+    final cached = await _loadSpeechesFromDb(date);
+    // Rows cached before root_debate_id existed can't be grouped by root
+    // debate — re-fetch the day once to backfill.
+    final isLegacy = cached.any((s) => s.rootDebateId == null);
+    if (!isLegacy && !await _isSittingCacheStale(date, cached)) return cached;
+    try {
+      return await _fetchAndCacheSitting(date);
+    } catch (_) {
+      if (cached.isEmpty) rethrow;
+      return cached;
     }
-    return _fetchAndCacheSitting(date);
+  }
+
+  /// The saved copy of [date]'s speeches without any network check, or
+  /// `null` when there is no usable copy (not cached, or a legacy cache that
+  /// [getSpeeches] would re-fetch anyway). Lets screens render instantly
+  /// while [getSpeeches] re-checks a day that may still be publishing.
+  Future<List<Speech>?> getCachedSpeeches(String date) async {
+    if (!await _db.sittingDbExists(date)) return null;
+    final cached = await _loadSpeechesFromDb(date);
+    if (cached.any((s) => s.rootDebateId == null)) return null;
+    return cached;
+  }
+
+  /// Re-fetches [date] from Hansard regardless of cache state (pull to
+  /// refresh). Throws on network failure, leaving the cache untouched.
+  Future<void> refreshSitting(String date) async {
+    await _speechesInFlight[date];
+    await _fetchAndCacheSitting(date);
+  }
+
+  /// Hansard publishes a sitting progressively through the day and settles
+  /// it by the following morning. A cache written before then may be partial
+  /// (or empty, if the day was opened before anything was published), so it
+  /// is re-checked — at most once per [_recentSittingRecheck].
+  Future<bool> _isSittingCacheStale(String date, List<Speech> cached) async {
+    final day = DateTime.tryParse(date);
+    if (day == null) return false;
+    final settledAt = DateTime(day.year, day.month, day.day + 1, 12);
+    final fetchedAt = await _sittingFetchedAt(date);
+    final now = DateTime.now();
+    if (fetchedAt == null) {
+      // Predates fetch tracking: only worth re-checking if it's recent or
+      // came back empty.
+      return cached.isEmpty || now.difference(day).inDays < 7;
+    }
+    if (!fetchedAt.isBefore(settledAt)) return false;
+    return now.difference(fetchedAt) >= _recentSittingRecheck;
+  }
+
+  Future<DateTime?> _sittingFetchedAt(String date) async {
+    final db = await _db.openSittingDb(date);
+    final rows = await db.query(
+      'meta',
+      where: 'key = ?',
+      whereArgs: ['fetched_at'],
+    );
+    if (rows.isEmpty) return null;
+    final ms = int.tryParse(rows.first['value'] as String? ?? '');
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
   Future<Map<String, dynamic>?> fetchMemberDetail(int id) =>
@@ -418,6 +488,13 @@ class ParliamentaryDataService {
     }
     return matches;
   }
+
+  /// Searches debate titles across all of Hansard (not just cached days).
+  Future<List<Map<String, dynamic>>> searchHansardDebates(
+    String query, {
+    int limit = 20,
+  }) =>
+      _hansardApi.searchDebates(query, take: limit);
 
   Future<bool> isSittingCached(String date) => _db.sittingDbExists(date);
 
@@ -527,13 +604,25 @@ class ParliamentaryDataService {
 
   Future<List<Speech>> _fetchAndCacheSitting(String date) async {
     final debates = await _hansardApi.fetchSittingDebates(date);
-    final speeches = <Speech>[];
 
-    // Chain the order index across roots so order_idx sorts the whole day
-    // in document order, not just within one root debate.
+    // Download every root concurrently (bounded), then parse in document
+    // order so the order index chains across roots exactly as before.
+    final bodies = <Map<String, dynamic>?>[];
+    for (var i = 0; i < debates.length; i += _debateFetchConcurrency) {
+      final batch = debates.skip(i).take(_debateFetchConcurrency);
+      bodies.addAll(
+        await Future.wait(batch.map((d) => _hansardApi.fetchDebateJson(d.id))),
+      );
+    }
+
+    final speeches = <Speech>[];
     var nextOrderIndex = 0;
-    for (final debate in debates) {
-      final debateSpeeches = await _hansardApi.fetchDebateSpeeches(
+    for (var i = 0; i < debates.length; i++) {
+      final body = bodies[i];
+      if (body == null) continue;
+      final debate = debates[i];
+      final debateSpeeches = _hansardApi.parseDebateSpeeches(
+        body,
         debate.id,
         debate.title,
         startOrderIndex: nextOrderIndex,
@@ -574,6 +663,14 @@ class ParliamentaryDataService {
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       }
+      await txn.insert(
+        'meta',
+        {
+          'key': 'fetched_at',
+          'value': '${DateTime.now().millisecondsSinceEpoch}',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     });
   }
 

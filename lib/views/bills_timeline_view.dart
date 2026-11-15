@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/house_colors.dart';
 import '../viewmodels/bills_timeline_viewmodel.dart';
-import 'app_drawer.dart';
 import 'bill_view.dart';
 
 /// Screen displaying UK Acts of Parliament (Royal Assent) on a date-proportional timeline.
@@ -107,7 +106,6 @@ class _BillsTimelineViewState extends State<BillsTimelineView> {
           ),
         ],
       ),
-      drawer: const AppDrawer(current: AppDestination.lawsTimeline),
       body: ChangeNotifierProvider.value(
         value: _vm,
         child: Consumer<BillsTimelineViewModel>(

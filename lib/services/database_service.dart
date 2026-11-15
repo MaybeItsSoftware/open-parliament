@@ -9,7 +9,8 @@ import 'package:sqflite/sqflite.dart';
 /// Two database families are maintained:
 ///  - `members.db`  — cached MP profiles, refreshed every 30 days.
 ///  - `sitting_YYYY-MM-DD.db` — one database per sitting day; created on first
-///    fetch and never modified after that (append-only cache).
+///    fetch and only rewritten while the day may still be publishing (see
+///    `ParliamentaryDataService.getSpeeches`).
 class DatabaseService {
   static const String _membersDbName = 'members.db';
 
@@ -145,7 +146,7 @@ class DatabaseService {
     final path = await sittingDbPath(date);
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE debates (
@@ -179,6 +180,7 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX idx_speeches_member ON speeches(member_id)',
         );
+        await db.execute(_sittingMetaDdl);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -197,7 +199,19 @@ class DatabaseService {
             'ALTER TABLE speeches ADD COLUMN root_debate_id TEXT',
           );
         }
+        if (oldVersion < 6) {
+          // Records when the day was fetched, so a sitting cached while
+          // Hansard was still publishing it can be refreshed later.
+          await db.execute(_sittingMetaDdl);
+        }
       },
     );
   }
+
+  static const String _sittingMetaDdl = '''
+    CREATE TABLE IF NOT EXISTS meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    )
+  ''';
 }

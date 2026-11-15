@@ -92,44 +92,82 @@ class TranscriptViewModel extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  /// Loads speeches for [date] from the local cache or network.
+  /// Loads speeches for [date].
+  ///
+  /// A saved copy is shown straight away; the data service then re-checks
+  /// the day if it may still have been publishing when saved, and the
+  /// transcript updates in place only if that brought new rows. The bill
+  /// lookup behind the "Bill" tab runs afterwards so it never holds up the
+  /// transcript (it is a network call, and offline it would wait out the
+  /// timeout).
   Future<void> loadSpeeches() async {
     _isLoading = true;
     _error = null;
     if (!_isDisposed) notifyListeners();
 
     try {
-      final allRawSpeeches = await _service.getSpeeches(date);
-      final debates = await _service.getDebatesForDate(date);
-      final rootIds = debates.map((d) => d.id).toSet();
-
-      _sittingStartSeconds = _findSittingStartSeconds(allRawSpeeches);
-      final rawSpeeches = initialDebateId != null
-          ? _speechesForRootDebate(allRawSpeeches, rootIds, initialDebateId!)
-          : allRawSpeeches;
-
-      final normalised = normaliseSpeeches(raw: rawSpeeches, date: date);
-      _speeches = normalised.speeches;
-      _timeAnchors = normalised.anchors;
-      _primaryDebateTitle = _computePrimaryDebateTitle(_speeches);
-      _primaryHouse = _computePrimaryHouseFromDebates(debates);
-      _primarySection = _computePrimarySectionFromDebates(debates);
-      _relatedBillTitle = detectBillTitle(_primaryDebateTitle ?? '');
-      if (_relatedBillTitle != null) {
+      final cached = await _service.getCachedSpeeches(date);
+      if (cached != null && cached.isNotEmpty) {
+        await _applySpeeches(cached);
+        _isLoading = false;
+        if (!_isDisposed) notifyListeners();
+        List<Speech>? fresh;
         try {
-          _relatedBillId = await _service.findBillId(_relatedBillTitle!);
+          fresh = await _service.getSpeeches(date);
         } catch (_) {
-          _relatedBillId = null;
+          fresh = null; // Offline: the saved copy stands.
         }
+        if (fresh != null && !_sameSpeeches(cached, fresh)) {
+          await _applySpeeches(fresh);
+        }
+      } else {
+        await _applySpeeches(await _service.getSpeeches(date));
       }
-      await _loadMemberProfiles();
-      _buildSpeakersIndex();
     } catch (e) {
       _error = e.toString();
     } finally {
       _isLoading = false;
       if (!_isDisposed) notifyListeners();
     }
+    await _resolveRelatedBillId();
+  }
+
+  Future<void> _applySpeeches(List<Speech> allRawSpeeches) async {
+    final debates = await _service.getDebatesForDate(date);
+    final rootIds = debates.map((d) => d.id).toSet();
+
+    _sittingStartSeconds = _findSittingStartSeconds(allRawSpeeches);
+    final rawSpeeches = initialDebateId != null
+        ? _speechesForRootDebate(allRawSpeeches, rootIds, initialDebateId!)
+        : allRawSpeeches;
+
+    final normalised = normaliseSpeeches(raw: rawSpeeches, date: date);
+    _speeches = normalised.speeches;
+    _timeAnchors = normalised.anchors;
+    _primaryDebateTitle = _computePrimaryDebateTitle(_speeches);
+    _primaryHouse = _computePrimaryHouseFromDebates(debates);
+    _primarySection = _computePrimarySectionFromDebates(debates);
+    _relatedBillTitle = detectBillTitle(_primaryDebateTitle ?? '');
+    await _loadMemberProfiles();
+    _buildSpeakersIndex();
+  }
+
+  static bool _sameSpeeches(List<Speech> a, List<Speech> b) =>
+      a.length == b.length &&
+      (a.isEmpty || (a.first.id == b.first.id && a.last.id == b.last.id));
+
+  Future<void> _resolveRelatedBillId() async {
+    final title = _relatedBillTitle;
+    if (title == null) {
+      _relatedBillId = null;
+      return;
+    }
+    try {
+      _relatedBillId = await _service.findBillId(title);
+    } catch (_) {
+      _relatedBillId = null;
+    }
+    if (!_isDisposed) notifyListeners();
   }
 
   /// Returns the index of the first speech belonging to [debateId], or null.
@@ -468,6 +506,16 @@ class TranscriptViewModel extends ChangeNotifier {
     Set<String> rootIds,
     String rootDebateId,
   ) {
+    // Hansard search can link to a sub-debate (e.g. one question within
+    // Oral Answers) rather than a root: show just that section's speeches.
+    if (!rootIds.contains(rootDebateId)) {
+      final wanted = rootDebateId.toUpperCase();
+      final section = [
+        for (final s in speeches)
+          if (s.debateId.toUpperCase() == wanted) s,
+      ];
+      if (section.isNotEmpty) return section;
+    }
     final result = <Speech>[];
     String? currentRoot;
     for (final speech in speeches) {

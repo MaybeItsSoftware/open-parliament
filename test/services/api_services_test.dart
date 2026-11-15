@@ -290,6 +290,30 @@ void main() {
   // ─── HansardApiService tests ─────────────────────────────────────────────
 
   group('HansardApiService', () {
+    test('parseDebateSearch maps results and drops incomplete rows', () {
+      final body = jsonEncode({
+        'Results': [
+          {
+            'DebateSection': 'Lords Chamber',
+            'SittingDate': '2026-03-03T00:00:00',
+            'House': 'Lords',
+            'Title': 'Assisted Dying Legislation',
+            'DebateSectionExtId': '354BAB2D',
+          },
+          {'Title': 'No id', 'SittingDate': '2026-03-03T00:00:00'},
+        ],
+        'TotalResultCount': 2,
+      });
+
+      final results = HansardApiService.parseDebateSearch(body);
+
+      expect(results, hasLength(1));
+      expect(results.single['debateId'], '354BAB2D');
+      expect(results.single['date'], '2026-03-03');
+      expect(results.single['house'], 'Lords');
+      expect(results.single['section'], 'Lords Chamber');
+    });
+
     test('fetchSittingDebates builds debates from overview endpoints',
         () async {
       final stub = _StubHttpClient([

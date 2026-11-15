@@ -5,7 +5,6 @@ import '../models/standing_order.dart';
 import '../utils/house_colors.dart';
 import '../utils/standing_order_helpers.dart';
 import '../utils/standing_orders_data.dart';
-import 'app_drawer.dart';
 
 /// Full directory and search view for UK Parliamentary Standing Orders.
 class StandingOrdersView extends StatefulWidget {
@@ -77,7 +76,6 @@ class _StandingOrdersViewState extends State<StandingOrdersView> {
     final orders = _filteredOrders;
 
     return Scaffold(
-      drawer: const AppDrawer(current: AppDestination.standingOrders),
       appBar: AppBar(
         title: const Text('Standing Orders'),
         bottom: PreferredSize(

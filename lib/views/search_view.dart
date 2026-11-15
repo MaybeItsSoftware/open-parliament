@@ -12,7 +12,6 @@ import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/constituency_map_viewmodel.dart';
 import '../viewmodels/search_viewmodel.dart';
 import '../widgets/person_avatar.dart';
-import 'app_drawer.dart';
 import 'bill_view.dart';
 import 'constituency_map_view.dart';
 import 'council_view.dart';
@@ -57,7 +56,6 @@ class _SearchViewState extends State<SearchView> {
         builder: (context, vm, _) {
           return Scaffold(
             appBar: AppBar(title: const Text('Search')),
-            drawer: const AppDrawer(current: AppDestination.search),
             body: Column(
               children: [
                 Padding(
@@ -445,7 +443,12 @@ class _SearchViewState extends State<SearchView> {
     final date = debate.dateValue;
     if (date != null) subtitleParts.add(_shortDate(date));
     if (debate.house.isNotEmpty) subtitleParts.add(debate.house);
-    if (debate.section?.isNotEmpty == true) subtitleParts.add(debate.section!);
+    final section = debate.section ?? '';
+    // Hansard search gives "Commons Chamber" alongside house "Commons" —
+    // don't repeat the house.
+    if (section.isNotEmpty && !section.startsWith(debate.house)) {
+      subtitleParts.add(section);
+    }
     final displayDate = date != null ? _friendlyDate(date) : debate.date;
     return ListTile(
       contentPadding: EdgeInsets.zero,

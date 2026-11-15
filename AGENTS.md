@@ -9,7 +9,7 @@ Operational guide for AI coding agents working in this repository. Humans are we
 Public APIs consumed:
 
 - **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id), `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share), and `…/Members/Parties/StateOfTheParties/{house}/{date}` (party composition of a house on a date, used by the hemicycle seating view and party profile). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
-- **Hansard API** — debate sections + speeches per sitting day.
+- **Hansard API** — debate sections + speeches per sitting day, plus `/search/debates.json` (Hansard-wide title search, merged with cached-day matches in Search; results can be sub-debate ids, which `TranscriptViewModel` narrows to that section).
 - **What's On API** — `https://whatson-api.parliament.uk/calendar/events/nonsitting.json?startDate=&endDate=&house=` — named non-sitting periods per house (e.g. *"Summer recess"*, Christmas adjournment, dissolution). Backs the recess tint + legend in the sitting-day calendar (`WhatsOnApiService`). Best-effort: any failure yields an unmarked (but still fully usable) calendar.
 - **Bills API** — `https://bills-api.parliament.uk/api/v1/Bills` — bill search/detail/stages/news and upcoming committee sittings, backing the Bills list/detail views and the debate-title → bill deep-link (`BillsApiService`).
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
@@ -57,12 +57,12 @@ The app follows a classic **MVVM-with-Provider** pattern, layered on top of a **
 1. **Views never talk to services directly.** A view reads a `ChangeNotifier` view-model via `Provider`/`Consumer`. The view-model owns the service call.
 2. **View-models never own widgets or `BuildContext`.** They expose plain getters and `notifyListeners()` after state mutations.
 3. **`ParliamentaryDataService` is the only service view-models depend on.** It internally orchestrates DB + HTTP. View-models do not import `MembersApiService` or `DatabaseService` directly.
-4. **Local-first reads:** the service checks SQLite first; on miss (or stale members cache) it fetches, persists, then returns. Once a sitting day is cached it is never re-fetched.
+4. **Local-first reads:** the service checks SQLite first; on miss (or stale members cache) it fetches, persists, then returns. A cached sitting day is only re-fetched while it may still be publishing (see below).
 
 ### Caching strategy
 
 - `members.db` — single members database, refreshed every **30 days** (`_membersCacheTtl`). Schema version is bumped via `onUpgrade` in `DatabaseService`.
-- `sitting_YYYY-MM-DD.db` — one file per sitting day, **append-only after first download** (no eviction yet).
+- `sitting_YYYY-MM-DD.db` — one file per sitting day (no eviction yet). Its `meta.fetched_at` row records when it was downloaded. Hansard publishes a day progressively and settles it by the next morning, so a day fetched before noon the following day is re-checked at most every 30 min (`_isSittingCacheStale`), falling back to the cached copy when offline. Once fetched after that point it is never re-fetched. `refreshSitting` forces a re-fetch (pull to refresh on the Debates feed). `getCachedSpeeches` reads the saved copy with no network check: the Debates feed and transcripts render from it immediately, then call `getSpeeches` and update in place only if the re-check brought new rows. A day's root debates are downloaded 6 at a time (`fetchDebateJson`) and parsed in document order (`parseDebateSpeeches`), so speech order indices and fallback ids are the same as a sequential fetch.
 - `speaker_aliases` table — learned mapping from attribution strings (e.g. *"The Minister of State"*) to a `member_id`, scoped per date for office titles. This is what lets us resolve speakers whose `MemberId` is missing in the raw Hansard payload.
 
 If you change DB schema, you **must** add an `onUpgrade` migration — never edit `onCreate` for an existing version.
@@ -112,7 +112,7 @@ lib/
 │   ├── settings_viewmodel.dart
 │   └── transcript_viewmodel.dart  # Speech normalisation + speaker resolution
 ├── views/                    # StatefulWidget screens, one per route
-│   ├── app_drawer.dart            # Shared nav drawer linking the main views
+│   ├── home_shell.dart            # Root: bottom NavigationBar (Debates/Search/Bills/Map, kept alive in an IndexedStack) + "More" sheet pushing the secondary screens
 │   ├── bill_view.dart             # Detail page for a single bill
 │   ├── bills_list_view.dart       # Listing for proposed / ongoing bills
 │   ├── bills_timeline_view.dart   # Laws Timeline: timeline-first view of UK Acts of Parliament

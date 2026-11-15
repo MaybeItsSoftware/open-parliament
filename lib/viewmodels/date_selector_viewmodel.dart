@@ -133,10 +133,16 @@ class DebateFeedResult {
   final List<SittingSession> sessions;
   final bool isPendingPublication;
 
+  /// True when the day couldn't be loaded at all (typically offline with
+  /// nothing cached), so the view can offer a retry instead of claiming
+  /// Parliament didn't sit.
+  final bool loadFailed;
+
   const DebateFeedResult({
     required this.items,
     this.sessions = const <SittingSession>[],
     this.isPendingPublication = false,
+    this.loadFailed = false,
   });
 }
 
@@ -145,11 +151,19 @@ class DebateFeedResult {
 class _AssembledFeed {
   final List<DebateFeedItem> items;
   final List<SittingSession> sessions;
+  final bool failed;
 
-  const _AssembledFeed({required this.items, required this.sessions});
+  const _AssembledFeed({
+    required this.items,
+    required this.sessions,
+    this.failed = false,
+  });
 
-  static const empty =
-      _AssembledFeed(items: <DebateFeedItem>[], sessions: <SittingSession>[]);
+  static const failure = _AssembledFeed(
+    items: <DebateFeedItem>[],
+    sessions: <SittingSession>[],
+    failed: true,
+  );
 }
 
 /// View-model backing the date selector screen.
@@ -465,13 +479,40 @@ class DateSelectorViewModel extends ChangeNotifier {
   /// with a coarse duration estimated from speech word counts. Placeholder
   /// debates (whose only content is the "The House met at …" announcement)
   /// and venue day-header roots are filtered out.
+  /// Forces a re-fetch of [day] from Hansard (pull to refresh). Errors
+  /// propagate so the view can tell the user the refresh failed.
+  Future<void> refreshDay(DateTime day) =>
+      _service.refreshSitting(_formatDate(day));
+
   Future<List<DebateFeedItem>> loadDebateFeed(DateTime day) async =>
       (await _loadAssembledFeed(day)).items;
 
-  Future<_AssembledFeed> _loadAssembledFeed(DateTime day) async {
+  /// The feed for [day] built from the saved copy only (no network), or
+  /// `null` when the day has no usable saved copy. Shown immediately while
+  /// [loadDebateFeedWithStatus] re-checks a day that may still be publishing.
+  Future<DebateFeedResult?> loadCachedDebateFeed(DateTime day) async {
+    final date = _formatDate(day);
+    final List<Speech>? cached;
+    try {
+      cached = await _service.getCachedSpeeches(date);
+    } catch (_) {
+      return null;
+    }
+    if (cached == null || cached.isEmpty) return null;
+    final feed = await _loadAssembledFeed(day, savedSpeeches: cached);
+    if (feed.failed || feed.items.isEmpty) return null;
+    return DebateFeedResult(items: feed.items, sessions: feed.sessions);
+  }
+
+  Future<_AssembledFeed> _loadAssembledFeed(
+    DateTime day, {
+    List<Speech>? savedSpeeches,
+  }) async {
     final date = _formatDate(day);
     try {
-      final speechesFuture = _service.getSpeeches(date);
+      final speechesFuture = savedSpeeches != null
+          ? Future.value(savedSpeeches)
+          : _service.getSpeeches(date);
       final debatesFuture = _service.getDebatesForDate(date);
       final membersFuture = _service.getMembers();
       final speeches = await speechesFuture;
@@ -487,7 +528,7 @@ class DateSelectorViewModel extends ChangeNotifier {
       final lookup = members.isEmpty ? null : MemberLookupIndex(members);
       return _assembleDebateFeed(debates, speeches, lookup);
     } catch (_) {
-      return _AssembledFeed.empty;
+      return _AssembledFeed.failure;
     }
   }
 
@@ -502,6 +543,9 @@ class DateSelectorViewModel extends ChangeNotifier {
     required bool isToday,
   }) async {
     final feed = await _loadAssembledFeed(day);
+    if (feed.failed) {
+      return const DebateFeedResult(items: <DebateFeedItem>[], loadFailed: true);
+    }
     if (feed.items.isNotEmpty || !isToday) {
       return DebateFeedResult(items: feed.items, sessions: feed.sessions);
     }

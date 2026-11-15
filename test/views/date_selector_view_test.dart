@@ -36,6 +36,19 @@ const _longTitle =
 /// a long title for every date — enough to drive the debate feed without
 /// hitting the network.
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
+
+  @override
+  Future<List<Speech>?> getCachedSpeeches(String date) async => null;
+
+  @override
+  Future<void> refreshSitting(String date) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> searchHansardDebates(
+    String query, {
+    int limit = 20,
+  }) async =>
+      const [];
   @override
   Future<List<Member>> getMembers() async => const [];
 

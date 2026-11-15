@@ -25,8 +25,22 @@ import 'package:open_parliament/services/parliamentary_data_service.dart';
 import 'package:open_parliament/services/theme_service.dart';
 import 'package:open_parliament/viewmodels/date_selector_viewmodel.dart';
 import 'package:open_parliament/views/date_selector_view.dart';
+import 'package:open_parliament/views/home_shell.dart';
 
 class _FakeParliamentaryDataService implements ParliamentaryDataService {
+
+  @override
+  Future<List<Speech>?> getCachedSpeeches(String date) async => null;
+
+  @override
+  Future<void> refreshSitting(String date) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> searchHansardDebates(
+    String query, {
+    int limit = 20,
+  }) async =>
+      const [];
   /// Per-date scripted content, keyed by `YYYY-MM-DD`. Dates not present
   /// return no debates/speeches (i.e. no visible content).
   Map<String, List<Debate>> debatesByDate = {};
@@ -227,6 +241,42 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
 }
 
 void main() {
+  testWidgets('home shell: More lists secondary sections, back returns to '
+      'Debates', (tester) async {
+    final fakeService = _FakeParliamentaryDataService();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ThemeService()),
+          Provider<ParliamentaryDataService>.value(value: fakeService),
+        ],
+        child: const MaterialApp(home: HomeShell()),
+      ),
+    );
+    await tester.pump();
+
+    int selected() =>
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
+    expect(selected(), 0);
+
+    await tester.tap(find.text('More'));
+    await tester.pumpAndSettle();
+    expect(find.text('Standing Orders'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    // More is a sheet, not a tab: the selection doesn't move.
+    expect(selected(), 0);
+    Navigator.of(tester.element(find.text('Settings'))).pop();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Bills'));
+    await tester.pump();
+    expect(selected(), 2);
+
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(selected(), 0);
+  });
+
   testWidgets('Landing page renders redesigned main view', (tester) async {
     final fakeService = _FakeParliamentaryDataService();
 
@@ -245,7 +295,8 @@ void main() {
 
     // Smoke-checks the redesigned chrome (top bar + chamber toggle), which
     // renders synchronously and doesn't depend on landing-day resolution.
-    expect(find.byTooltip('Menu'), findsOneWidget);
+    expect(find.byTooltip('Previous sitting day'), findsOneWidget);
+    expect(find.byTooltip('Next sitting day'), findsOneWidget);
     expect(find.text('All'), findsOneWidget);
     expect(find.text('Commons'), findsOneWidget);
     expect(find.text('Lords'), findsOneWidget);

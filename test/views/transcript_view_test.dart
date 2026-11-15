@@ -18,6 +18,19 @@ import 'package:open_parliament/views/bill_view.dart';
 import 'package:open_parliament/views/transcript_view.dart';
 
 class _FakeTranscriptDataService implements ParliamentaryDataService {
+
+  @override
+  Future<List<Speech>?> getCachedSpeeches(String date) async => null;
+
+  @override
+  Future<void> refreshSitting(String date) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> searchHansardDebates(
+    String query, {
+    int limit = 20,
+  }) async =>
+      const [];
   final String debateTitle;
   int? billIdToReturn = 1234;
 

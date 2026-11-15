@@ -232,48 +232,33 @@ class SearchViewModel extends ChangeNotifier {
     final token = ++_searchToken;
     final errors = <String>[];
 
-    List<Member> members = const [];
-    List<ConstituencySearchResult> constituencies = const [];
-    List<Council> councils = const [];
-    List<CouncillorSearchResult> councillors = const [];
-    List<BillSearchResult> bills = const [];
-    List<DebateSearchResult> debates = const [];
+    // Each source is independent (several hit the network), so run them
+    // concurrently; one failing source doesn't blank the others.
+    Future<List<T>> guarded<T>(String label, Future<List<T>> Function() run) =>
+        run().catchError((Object e) {
+          errors.add(label);
+          return <T>[];
+        });
 
-    try {
-      members = await _searchMembers(normalized);
-    } catch (e) {
-      errors.add('Members: ${e.toString()}');
-    }
+    final membersF = guarded('Members', () => _searchMembers(normalized));
+    final constituenciesF = guarded(
+      'Constituencies',
+      () => _searchConstituencies(normalized),
+    );
+    final councilsF = guarded('Councils', () => _searchCouncils(normalized));
+    final councillorsF = guarded(
+      'Councillors',
+      () => _searchCouncillors(normalized),
+    );
+    final billsF = guarded('Bills', () => _searchBills(trimmed));
+    final debatesF = guarded('Debates', () => _searchDebates(trimmed));
 
-    try {
-      constituencies = await _searchConstituencies(normalized);
-    } catch (e) {
-      errors.add('Constituencies: ${e.toString()}');
-    }
-
-    try {
-      councils = await _searchCouncils(normalized);
-    } catch (e) {
-      errors.add('Councils: ${e.toString()}');
-    }
-
-    try {
-      councillors = await _searchCouncillors(normalized);
-    } catch (e) {
-      errors.add('Councillors: ${e.toString()}');
-    }
-
-    try {
-      bills = await _searchBills(trimmed);
-    } catch (e) {
-      errors.add('Bills: ${e.toString()}');
-    }
-
-    try {
-      debates = await _searchDebates(trimmed);
-    } catch (e) {
-      errors.add('Debates: ${e.toString()}');
-    }
+    final members = await membersF;
+    final constituencies = await constituenciesF;
+    final councils = await councilsF;
+    final councillors = await councillorsF;
+    final bills = await billsF;
+    final debates = await debatesF;
 
     if (token != _searchToken) return;
     _results = SearchResults(
@@ -284,7 +269,9 @@ class SearchViewModel extends ChangeNotifier {
       constituencies: constituencies,
       councils: councils,
     );
-    _error = errors.isEmpty ? null : errors.join('\n');
+    _error = errors.isEmpty
+        ? null
+        : 'Couldn’t search ${errors.join(', ')}. Check your connection.';
     _isLoading = false;
     _safeNotify();
   }
@@ -392,24 +379,41 @@ class SearchViewModel extends ChangeNotifier {
     return results;
   }
 
+  /// Cached-day title matches first (instant, offline), then Hansard-wide
+  /// matches for everything else. Hansard search failing (e.g. offline)
+  /// still leaves the cached matches.
   Future<List<DebateSearchResult>> _searchDebates(String query) async {
-    final raw = await _service.searchCachedDebates(query, limit: _debateLimit);
-    return raw
-        .map((json) {
-          final id = json['debateId'] as String? ?? '';
-          final title = json['title'] as String? ?? '';
-          final date = json['date'] as String? ?? '';
-          if (id.isEmpty || title.isEmpty || date.isEmpty) return null;
-          return DebateSearchResult(
-            debateId: id,
-            title: title,
-            house: (json['house'] as String?) ?? '',
-            date: date,
-            section: json['section'] as String?,
-          );
-        })
-        .whereType<DebateSearchResult>()
-        .toList();
+    final hansardFuture = _service
+        .searchHansardDebates(query, limit: _debateLimit)
+        .then<List<Map<String, dynamic>>?>((r) => r)
+        .catchError((Object _) => null);
+    final cached =
+        await _service.searchCachedDebates(query, limit: _debateLimit);
+    final hansard = await hansardFuture;
+    if (hansard == null && cached.isEmpty) {
+      throw StateError('Hansard search unavailable');
+    }
+
+    final seen = <String>{};
+    final results = <DebateSearchResult>[];
+    for (final json in [...cached, ...?hansard]) {
+      final id = json['debateId'] as String? ?? '';
+      final title = json['title'] as String? ?? '';
+      final date = json['date'] as String? ?? '';
+      if (id.isEmpty || title.isEmpty || date.isEmpty) continue;
+      if (!seen.add(id.toUpperCase())) continue;
+      results.add(
+        DebateSearchResult(
+          debateId: id,
+          title: title,
+          house: (json['house'] as String?) ?? '',
+          date: date,
+          section: json['section'] as String?,
+        ),
+      );
+    }
+    results.sort((a, b) => b.date.compareTo(a.date));
+    return results.take(_debateLimit).toList();
   }
 
   Future<List<_IndexedMember>> _loadMemberIndex() async {
