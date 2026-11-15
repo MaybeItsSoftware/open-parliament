@@ -137,9 +137,10 @@ jobs:
           echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" > assets/env/.env
 
       - name: Build & upload to TestFlight
-        run: bundle exec fastlane ios beta
+        # +2000 keeps build numbers above the 1001/1002 Tramline used for its
+        # 0.10.0 uploads; the stores reject (iOS) or shadow (Play) lower ones.
+        run: BUILD_NUMBER=$((GITHUB_RUN_NUMBER + 2000)) bundle exec fastlane ios beta
         env:
-          BUILD_NUMBER: ${{ github.run_number }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
@@ -213,9 +214,10 @@ jobs:
           EOF
 
       - name: Build & upload to Play (internal)
-        run: bundle exec fastlane android beta
+        # +2000 keeps build numbers above the 1001/1002 Tramline used for its
+        # 0.10.0 uploads; the stores reject (iOS) or shadow (Play) lower ones.
+        run: BUILD_NUMBER=$((GITHUB_RUN_NUMBER + 2000)) bundle exec fastlane android beta
         env:
-          BUILD_NUMBER: ${{ github.run_number }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
 
       - name: Upload native symbols to Sentry
