@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/debate.dart';
 import '../models/member.dart';
+import '../models/parliament_live_event.dart';
 import '../models/speech.dart';
 import '../services/parliamentary_data_service.dart';
 import '../utils/bill_helpers.dart';
@@ -290,15 +291,76 @@ class TranscriptViewModel extends ChangeNotifier {
     return _liveTargetFuture!;
   }
 
-  Future<ParliamentLiveTarget> _resolveParliamentLiveTarget({
-    required String debateTitle,
-    required String? seekTimecode,
-  }) async {
-    final event = await _service.findLiveEventForDebate(
+  Future<ParliamentLiveEvent?>? _liveEventFuture;
+  String? _liveEventCacheKey;
+
+  /// Memoised parliamentlive.tv event lookup for [debateTitle]. Shared by the
+  /// debate-level target and every per-speech target so the day's event list
+  /// is fetched once, however many speeches are deep-linked.
+  Future<ParliamentLiveEvent?> _liveEventForDebate(String debateTitle) {
+    final key = '$date|$debateTitle|${primaryHouse ?? ''}';
+    if (_liveEventFuture != null && _liveEventCacheKey == key) {
+      return _liveEventFuture!;
+    }
+    _liveEventCacheKey = key;
+    _liveEventFuture = _service.findLiveEventForDebate(
       date: date,
       debateTitle: debateTitle,
       house: primaryHouse,
     );
+    return _liveEventFuture!;
+  }
+
+  /// Best available Hansard timecode (`HH:MM:SS`) for the speech at [index]
+  /// in [speeches], used to deep-link that speech into parliamentlive.tv.
+  ///
+  /// Prefers the speech's own explicit `Timecode`, then falls back to an
+  /// estimate interpolated from the transcript's time anchors. Returns `null`
+  /// when [index] is out of range or no time can be derived.
+  String? parliamentLiveTimecodeForSpeechIndex(int index) {
+    if (index < 0 || index >= _speeches.length) return null;
+    final raw = _speeches[index].timecode;
+    if (raw != null && raw.trim().isNotEmpty) {
+      final seconds = parseTimecodeToSeconds(raw);
+      if (seconds != null) return formatSecondsAsTimecode(seconds);
+    }
+    final anchoredSeconds =
+        interpolateSecondsAtPosition(_timeAnchors, index.toDouble());
+    if (anchoredSeconds == null) return null;
+    return formatSecondsAsTimecode(anchoredSeconds);
+  }
+
+  /// Human-readable `HH:MM` label for [parliamentLiveTimecodeForSpeechIndex].
+  String? parliamentLiveClockLabelForSpeechIndex(int index) {
+    final timecode = parliamentLiveTimecodeForSpeechIndex(index);
+    if (timecode == null) return null;
+    final seconds = parseTimecodeToSeconds(timecode);
+    if (seconds == null) return null;
+    return formatSecondsAsClockMinute(seconds);
+  }
+
+  /// Resolves a parliamentlive.tv target that starts at the speech at
+  /// [index]. Uses the same (memoised) event lookup as
+  /// [parliamentLiveTarget]; only the `?in=` seek differs. Returns `null` when
+  /// no timecode is available for the speech.
+  ///
+  /// When no direct event matches, the result is the day-search URL with
+  /// [ParliamentLiveTarget.hasDirectEvent] false — callers should say so
+  /// rather than implying the video starts at this speech.
+  Future<ParliamentLiveTarget?> parliamentLiveTargetForSpeech(int index) async {
+    final timecode = parliamentLiveTimecodeForSpeechIndex(index);
+    if (timecode == null) return null;
+    return _resolveParliamentLiveTarget(
+      debateTitle: (primaryDebateTitle ?? '').trim(),
+      seekTimecode: timecode,
+    );
+  }
+
+  Future<ParliamentLiveTarget> _resolveParliamentLiveTarget({
+    required String debateTitle,
+    required String? seekTimecode,
+  }) async {
+    final event = await _liveEventForDebate(debateTitle);
     if (event != null) {
       final launchUrl = live_url.parliamentLiveEventUrl(
         event.guid,
