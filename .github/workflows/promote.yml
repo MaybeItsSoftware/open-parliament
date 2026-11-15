@@ -33,6 +33,7 @@ jobs:
       - name: Set up Ruby + Fastlane
         uses: ruby/setup-ruby@v1
         with:
+          ruby-version: '3.3' # see deploy.yml
           bundler-cache: true
 
       - name: Submit to App Store review
@@ -56,6 +57,7 @@ jobs:
       - name: Set up Ruby + Fastlane
         uses: ruby/setup-ruby@v1
         with:
+          ruby-version: '3.3' # see deploy.yml
           bundler-cache: true
 
       - name: Promote internal → production
