@@ -1,5 +1,5 @@
 name: open_parliament
-description: Mobile app for reading UK Parliamentary debates verbatim from Hansard.
+description: Read UK Parliament debates word for word from Hansard, follow MPs and bills, and see who runs your council.
 version: 0.9.0+900
 publish_to: none
 

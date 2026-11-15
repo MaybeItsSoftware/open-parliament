@@ -1,1 +1,6 @@
-Initial release of Open Parliament.
+• New tab bar: Debates, Search, Bills and Map are now one tap away, with everything else under More
+• Much faster first launch and first open of a day
+• Watch from here: long-press any speech to open the video at the moment it began
+• Days you've already read open instantly. Pull down to check for updates
+• Search now covers all of Hansard, not just days you've opened
+• Older saved days are cleared out automatically to save space

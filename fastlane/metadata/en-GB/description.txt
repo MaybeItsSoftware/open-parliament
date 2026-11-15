@@ -1,16 +1,39 @@
-Open Parliament lets you read UK Parliamentary debates verbatim from Hansard.
+Every word said in Parliament, in your pocket.
 
-Features:
-- Read debates from the House of Commons and House of Lords.
-- Full offline support: search and read cached debates without an internet connection.
-- Track bills, member profiles, and voting records.
-- View live parliament broadcast schedules.
+Open Parliament turns the official record of the House of Commons and House of Lords into a fast, readable app. Read debates exactly as they were spoken, see who said what, check how your MP voted, and follow new laws from first reading to Royal Assent.
 
-Data sources:
-This app displays public data retrieved live from the official UK Parliament APIs:
-- Hansard (debate transcripts): https://hansard-api.parliament.uk
-- Members API (MP and Lords profiles, voting records): https://members-api.parliament.uk
-- Bills API (bill stages and news): https://bills-api.parliament.uk
-- Parliament Live (broadcast schedules): https://parliamentlive.tv
+READ THE DEBATES
+• Every Commons, Lords, Westminster Hall and Grand Committee sitting, word for word from Hansard
+• Each contribution shows the speaker's photo, party and role, even when Hansard only calls them "The Minister"
+• Votes appear as clear results: how many voted each way, and who
+• Watch the video of a debate on parliamentlive.tv, or jump straight to the moment a speech began
+• Browse by day on a sitting calendar that marks recesses
 
-Disclaimer: Open Parliament is an independent, unofficial app. It is not affiliated with, endorsed by, or operated by the UK Parliament, the House of Commons, the House of Lords, or any UK government entity. For official government information, visit https://www.parliament.uk.
+FOLLOW YOUR MP
+• Profiles for every MP and member of the House of Lords, with their recent contributions and voting record
+• Constituency pages with the latest general election result, majority, turnout and vote share
+• See the current make-up of each House on a seating chart
+
+TRACK THE LAW
+• Bills going through Parliament now, with every stage and upcoming committee sittings
+• Read the full text of a bill
+• A timeline of Acts of Parliament
+• Look up the Standing Orders, the rules that govern the House of Commons
+
+KNOW WHO RUNS YOUR AREA
+• A national map coloured by who holds each constituency and council
+• Council pages with seat breakdowns, control history going back decades, and every ward councillor
+
+BUILT FOR READING
+• One search box for debates, MPs, constituencies, councils, councillors and bills
+• Save speeches and share quotes
+• Days you have opened stay on your phone, so you can read them offline
+• No account and no ads
+
+DATA SOURCES
+Open Parliament shows public data from official UK Parliament services: Hansard (hansard.parliament.uk), the Members API, the Bills API and parliamentlive.tv. Contains Parliamentary information licensed under the Open Parliament Licence v3.0.
+
+Council control and councillors: OpenCouncilData (CC BY-SA 4.0). Councillor photos and contacts: Democracy Club (CC BY 4.0). Boundaries: Office for National Statistics. Maps: © OpenStreetMap contributors, © CARTO.
+
+DISCLAIMER
+Open Parliament is an independent, unofficial app. It is not affiliated with, endorsed by or operated by the UK Parliament, the House of Commons, the House of Lords or any UK government body. For official information, visit https://www.parliament.uk.
