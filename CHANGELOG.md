@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.10.0...v0.11.0) (2026-11-19)
+
+
+### Features
+
+* **member:** amendment text for votes; working speech history ([32f1f08](https://github.com/MaybeItsSoftware/open-parliament/commit/32f1f0864ad592d8e3ef1c5ae67a1320ed76aaa5))
+
 # [0.10.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.9.0...v0.10.0) (2026-11-15)
 
 
