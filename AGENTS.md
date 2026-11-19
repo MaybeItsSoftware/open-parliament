@@ -9,9 +9,10 @@ Operational guide for AI coding agents working in this repository. Humans are we
 Public APIs consumed:
 
 - **Members API** — `https://members-api.parliament.uk/api/Members` — MP profiles, party, portrait. Also `…/api/Location/Constituency/Search?searchText=` (name → constituency id), `…/Location/Constituency/{id}/ElectionResult/latest` (latest general-election result: winner, majority, turnout, electorate, and per-candidate votes / vote share), and `…/Members/Parties/StateOfTheParties/{house}/{date}` (party composition of a house on a date, used by the hemicycle seating view and party profile). Note: the July 2024 boundary review gave every GB seat a new id, so the API holds **only the 2024 election** per current constituency — the constituency page shows the latest result, not a multi-election history.
-- **Hansard API** — debate sections + speeches per sitting day, plus `/search/debates.json` (Hansard-wide title search, merged with cached-day matches in Search; results can be sub-debate ids, which `TranscriptViewModel` narrows to that section).
+- **Hansard API** — debate sections + speeches per sitting day, plus `/search/debates.json` (Hansard-wide title search, merged with cached-day matches in Search; results can be sub-debate ids, which `TranscriptViewModel` narrows to that section). And `/search/contributions/Spoken.json?queryParameters.memberId=&skip=&take=` — a member's speeches, newest first, with `TotalResultCount`; its `ItemId` equals `Speech.id`, so `TranscriptView(initialDebateId: DebateSectionExtId, initialSpeechId: ItemId)` opens at the exact speech. (The old `/search/contributions.json` 404s; `Timecode` is null in practice and `Written.json` returns nothing for members.)
 - **What's On API** — `https://whatson-api.parliament.uk/calendar/events/nonsitting.json?startDate=&endDate=&house=` — named non-sitting periods per house (e.g. *"Summer recess"*, Christmas adjournment, dissolution). Backs the recess tint + legend in the sitting-day calendar (`WhatsOnApiService`). Best-effort: any failure yields an unmarked (but still fully usable) calendar.
-- **Bills API** — `https://bills-api.parliament.uk/api/v1/Bills` — bill search/detail/stages/news and upcoming committee sittings, backing the Bills list/detail views and the debate-title → bill deep-link (`BillsApiService`).
+- **Bills API** — `https://bills-api.parliament.uk/api/v1/Bills` — bill search/detail/stages/news and upcoming committee sittings, backing the Bills list/detail views and the debate-title → bill deep-link (`BillsApiService`). Also `…/Bills/{id}/Stages/{stageId}/Amendments?AmendmentNumber=` and `…/Amendments/{amendmentId}` for the text behind a division (always filter by number — a whole committee-stage paper can take the API 30s+ to serve). "Lords Amendments" considered by the Commons are a separate paper the API does not expose.
+- **Lords Votes API** — `https://lordsvotes-api.parliament.uk/data/Divisions/{id}` — a Lords division's `amendmentMotionNotes` (who moved which amendment, and the motion wording). Lords division titles are just the bill name, so this is the only route from a Lords vote to its amendment number (`LordsVotesApiService`).
 - **Nominatim** (OpenStreetMap) — geocoding constituency names for the member map.
 - **ONS Open Geography (ArcGIS)** — Westminster constituency and local-authority-district boundary polygons for the national control map (`BoundaryApiService`).
 - **OpenCouncilData** — two feeds. `https://opencouncildata.co.uk/councils.php` HTML table scraped for each council's political control (party / coalition / NOC); `parseCouncils` parses it. The `?y=<year>` parameter returns that year's historical composition (archive back to 1973), which drives the council page's control-history section; `CouncilControlService.loadCouncils({year})` caches each year in its own `councils_<year>.json` file so the current table is never overwritten. `https://opencouncildata.co.uk/csv2.php?y=<year>` is the free annual councillors CSV (name, ward, party — no contacts; those are a paid dataset); `parseCouncillors` parses it. Both cached on disk (30-day TTL) by `CouncilControlService` / `CouncillorService`. CC BY-SA 4.0, so attribute it in any UI that surfaces the data.
@@ -73,6 +74,7 @@ If you change DB schema, you **must** add an `onUpgrade` migration — never edi
 lib/
 ├── main.dart                 # App bootstrap, Provider wiring, theme
 ├── models/                   # Pure data classes; (de)serialise to/from API + SQLite
+│   ├── amendment.dart        # A bill amendment + what a division voted on (DivisionAmendment)
 │   ├── boundary.dart         # A map boundary polygon (constituency or council)
 │   ├── council.dart          # A local authority: control, seat composition
 │   ├── councillor.dart       # A ward councillor (name, ward, party)
@@ -80,6 +82,7 @@ lib/
 │   ├── debate.dart           # A debate node (one or more speeches)
 │   ├── election_result.dart  # Latest general-election result for a constituency
 │   ├── member.dart           # MP profile (id, name, party, portrait)
+│   ├── member_contribution.dart # One spoken Hansard contribution by a member
 │   ├── parliament_live_event.dart # A parliamentlive.tv broadcast (guid, title)
 │   ├── party_stats.dart      # A party's current/historical seat count
 │   ├── recess_period.dart    # A named non-sitting period (recess/adjournment)
@@ -107,6 +110,7 @@ lib/
 │   ├── date_selector_viewmodel.dart
 │   ├── house_seating_viewmodel.dart # Hemicycle seating chart (state of the parties)
 │   ├── member_viewmodel.dart
+│   ├── member_speeches_viewmodel.dart # A member's full speech list, paged
 │   ├── party_viewmodel.dart         # Single party's current + historical seats
 │   ├── search_viewmodel.dart        # Debounced search across cached debate titles
 │   ├── settings_viewmodel.dart
@@ -122,7 +126,8 @@ lib/
 │   ├── councillor_view.dart       # Single councillor profile: party, ward, council, next election, web search; lazily enriched with a Democracy Club photo, email, links & "first elected"
 │   ├── date_selector_view.dart    # Landing page — calendar of sitting days
 │   ├── house_seating_view.dart    # Hemicycle seating chart for a house/date
-│   ├── member_view.dart           # MP profile + constituency map (constituency line → constituency_view)
+│   ├── member_view.dart           # MP profile + constituency map (constituency line → constituency_view); 5 recent speeches → member_speeches_view
+│   ├── member_speeches_view.dart  # All of a member's speeches (paged); tap → transcript at that speech
 │   ├── parliament_live_view.dart  # Full-screen parliamentlive.tv playback
 │   ├── party_view.dart            # Single party's profile (current + historical seats)
 │   ├── saved_speeches_view.dart   # Bookmarked speeches (Settings → Saved)
@@ -137,6 +142,9 @@ lib/
 │   │   ├── division_result_card.dart
 │   │   ├── in_chair_banner.dart
 │   │   └── speaker_contribution_card.dart
+│   ├── amendment_sheet.dart  # Bottom sheet: an amendment as a diff (removed/added),
+│   │                         # opened from a vote row in the member voting record
+│   ├── contribution_tile.dart # A member's speech row (debate, venue, date, excerpt)
 │   ├── control_split_bar.dart # Reusable stacked party-split bar (council seats,
 │   │                         # constituency vote share)
 │   ├── council_control_history_chart.dart # Stacked seats-per-year graph (fills
@@ -144,6 +152,8 @@ lib/
 │   ├── sitting_day_calendar.dart # Bottom-sheet calendar picker for a sitting day
 │   └── speech_actions_sheet.dart # Long-press sheet: save / copy / share a speech
 └── utils/                    # Pure helpers (no Flutter, no I/O)
+    ├── amendment_diff.dart   # Segments amendment wording into deleted/inserted/anchor spans
+    ├── amendment_ref.dart    # Division title / Lords notes → bill + amendment number + stage
     ├── area_match.dart       # Fuzzy name matching for constituencies/councils
     ├── committee_roster.dart # Merges committee-membership preamble rows
     ├── council_control.dart  # Parses OpenCouncilData's HTML control table

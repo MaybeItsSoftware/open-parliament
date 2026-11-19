@@ -42,11 +42,16 @@ class TranscriptView extends StatefulWidget {
   /// once loading completes.
   final String? initialDebateId;
 
+  /// If set, the transcript scrolls to the speech with this id (Hansard
+  /// `ItemId`, i.e. `Speech.id`) once loaded and briefly highlights it.
+  final String? initialSpeechId;
+
   const TranscriptView({
     super.key,
     required this.date,
     required this.displayDate,
     this.initialDebateId,
+    this.initialSpeechId,
   });
 
   @override
@@ -58,6 +63,12 @@ class _TranscriptViewState extends State<TranscriptView>
   static const int _speechListStartIndex = 1;
 
   late TranscriptViewModel _vm;
+
+  // Scroll-to-speech for [TranscriptView.initialSpeechId]: done once, then the
+  // target stays tinted for a few seconds so the eye can find it.
+  bool _didInitialSpeechScroll = false;
+  int? _focusedSpeechIndex;
+  Timer? _focusTimer;
   final ItemScrollController _scrollController = ItemScrollController();
   final ItemPositionsListener _positionsListener =
       ItemPositionsListener.create();
@@ -122,6 +133,9 @@ class _TranscriptViewState extends State<TranscriptView>
       initialDebateId: widget.initialDebateId,
     );
     _positionsListener.itemPositions.addListener(_onPositionsChanged);
+    if (widget.initialSpeechId != null) {
+      _vm.addListener(_scrollToInitialSpeech);
+    }
     _trayController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 250),
@@ -133,6 +147,8 @@ class _TranscriptViewState extends State<TranscriptView>
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _vm.removeListener(_scrollToInitialSpeech);
+    _focusTimer?.cancel();
     _trayController.dispose();
     _minimapController.dispose();
     _pageController.dispose();
@@ -190,6 +206,28 @@ class _TranscriptViewState extends State<TranscriptView>
     if ((_minimapController.offset - target).abs() > 0.5) {
       _minimapController.jumpTo(target);
     }
+  }
+
+  void _scrollToInitialSpeech() {
+    final id = widget.initialSpeechId;
+    if (_didInitialSpeechScroll || id == null) return;
+    if (_vm.isLoading || _vm.speeches.isEmpty) return;
+    _didInitialSpeechScroll = true;
+    _vm.removeListener(_scrollToInitialSpeech);
+    final index = _vm.speeches.indexWhere((s) => s.id == id);
+    if (index < 0) return; // Not in this copy of the day: stay at the top.
+    setState(() => _focusedSpeechIndex = index);
+    // The list is built on the frame after loading finishes.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.isAttached) return;
+      _scrollController.jumpTo(
+        index: index + _speechListStartIndex,
+        alignment: 0.08,
+      );
+    });
+    _focusTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _focusedSpeechIndex = null);
+    });
   }
 
   void _jumpToIndex(int index) {
@@ -734,10 +772,11 @@ class _TranscriptViewState extends State<TranscriptView>
           final isCurrentMatch =
               _searchMatches.isNotEmpty &&
               speechIndex == _searchMatches[_currentMatchPosition];
+          final isFocused = speechIndex == _focusedSpeechIndex;
           return AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             color:
-                isCurrentMatch
+                isCurrentMatch || isFocused
                     ? Theme.of(
                       context,
                     ).colorScheme.primary.withValues(alpha: 0.18)

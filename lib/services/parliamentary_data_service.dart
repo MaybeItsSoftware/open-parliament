@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../models/amendment.dart';
 import '../models/boundary.dart';
 import '../models/council.dart';
 import '../models/councillor.dart';
@@ -10,6 +11,8 @@ import '../models/member.dart';
 import '../models/parliament_live_event.dart';
 import '../models/recess_period.dart';
 import '../models/speech.dart';
+import '../utils/amendment_diff.dart';
+import '../utils/amendment_ref.dart';
 import '../utils/area_match.dart';
 import '../utils/parliament_live.dart' as live_match;
 import 'api_services.dart';
@@ -45,6 +48,7 @@ class ParliamentaryDataService {
   final WhatsOnApiService _whatsOnApi;
   final ParliamentLiveApiService _liveApi;
   final BillsApiService _billsApi;
+  final LordsVotesApiService _lordsVotesApi;
   final BoundaryService _boundaryService;
   final CouncilControlService _councilControlService;
   final CouncillorService _councillorService;
@@ -68,6 +72,7 @@ class ParliamentaryDataService {
     WhatsOnApiService? whatsOnApiService,
     ParliamentLiveApiService? parliamentLiveApiService,
     BillsApiService? billsApiService,
+    LordsVotesApiService? lordsVotesApiService,
     BoundaryService? boundaryService,
     CouncilControlService? councilControlService,
     CouncillorService? councillorService,
@@ -78,6 +83,7 @@ class ParliamentaryDataService {
         _whatsOnApi = whatsOnApiService ?? WhatsOnApiService(),
         _liveApi = parliamentLiveApiService ?? ParliamentLiveApiService(),
         _billsApi = billsApiService ?? BillsApiService(),
+        _lordsVotesApi = lordsVotesApiService ?? LordsVotesApiService(),
         _boundaryService = boundaryService ?? BoundaryService(),
         _councilControlService =
             councilControlService ?? CouncilControlService(),
@@ -210,6 +216,117 @@ class ParliamentaryDataService {
 
   Future<List<Map<String, dynamic>>> fetchBillPublications(int id) =>
       _billsApi.fetchBillPublications(id);
+
+  /// Works out what a division was voting on and fetches the amendment text.
+  ///
+  /// Commons: the amendment number is parsed from [title] ("… Report Stage:
+  /// New Clause 62"). Lords: the title is just the bill name, so the number
+  /// comes from the division's motion notes, which are also returned as
+  /// [DivisionAmendment.motionText]. The bill is then matched by title and
+  /// confirmed by having a stage that sat in [house] on [date] — titles alone
+  /// are ambiguous across sessions — and the amendment is looked up on that
+  /// stage's amendment paper.
+  Future<DivisionAmendment> fetchDivisionAmendment({
+    required int divisionId,
+    required int house,
+    required String title,
+    required DateTime date,
+  }) async {
+    String? motionText;
+    AmendmentRef? ref;
+    if (house == 2) {
+      final division = await _lordsVotesApi.fetchDivision(divisionId);
+      final notes = division?['amendmentMotionNotes'] as String?;
+      if (notes != null && notes.trim().isNotEmpty) {
+        motionText = cleanAmendmentHtml(notes)
+            .replaceAll('\u0001', '')
+            .replaceAll('\u0002', '');
+        final number = parseLordsAmendmentNumber(motionText);
+        if (number != null) {
+          ref = AmendmentRef(billTitle: title, number: number);
+        }
+      }
+    } else {
+      ref = parseCommonsDivisionTitle(title);
+    }
+
+    if (ref == null || ref.number == null) {
+      return DivisionAmendment(
+        motionText: motionText,
+        unavailableReason: motionText == null
+            ? 'This division was not on a numbered amendment.'
+            : null,
+      );
+    }
+
+    final houseName = house == 2 ? 'Lords' : 'Commons';
+    final candidates = await _billsApi.searchBills(
+      ref.billTitle.replaceAll(RegExp(r'\[[^\]]*\]'), '').trim(),
+    );
+    final wanted = normaliseBillTitle(ref.billTitle);
+    final billIds = [
+      for (final c in candidates)
+        if (normaliseBillTitle((c['shortTitle'] as String?) ?? '') == wanted)
+          if (c['billId'] case final int id) id,
+    ];
+
+    // Fetched together: each Bills API call can take seconds, and a common
+    // title usually matches only one or two bills.
+    final stagesByBill = await Future.wait([
+      for (final id in billIds) _billsApi.fetchBillStages(id, take: 60),
+    ]);
+    for (var i = 0; i < billIds.length; i++) {
+      final billId = billIds[i];
+      final stages = candidateStages(
+        stagesByBill[i],
+        house: houseName,
+        date: date,
+        stageHint: ref.stageHint,
+      );
+      if (stages.isEmpty) continue;
+      if (ref.isLordsAmendment) {
+        return DivisionAmendment(
+          motionText: motionText,
+          billId: billId,
+          stageName: stages.first.$2,
+          unavailableReason:
+              'Lords Amendments are published as a separate paper that '
+              "isn't available in structured form — open the bill to read it.",
+        );
+      }
+      for (final (stageId, stageName) in stages) {
+        final summary =
+            await _billsApi.fetchStageAmendment(billId, stageId, ref.number!);
+        if (summary == null) continue;
+        final id = (summary['amendmentId'] as num?)?.toInt();
+        final detail = id == null
+            ? null
+            : await _billsApi.fetchAmendmentDetail(billId, stageId, id);
+        return DivisionAmendment(
+          motionText: motionText,
+          billId: billId,
+          stageName: stageName,
+          // Detail repeats most list fields but some come back null there.
+          amendment: Amendment.fromJson({
+            ...summary,
+            ...?detail?.map((k, v) => MapEntry(k, v ?? summary[k])),
+          }),
+        );
+      }
+      return DivisionAmendment(
+        motionText: motionText,
+        billId: billId,
+        stageName: stages.first.$2,
+        unavailableReason:
+            'Amendment ${ref.number} is not on the published amendment paper yet.',
+      );
+    }
+
+    return DivisionAmendment(
+      motionText: motionText,
+      unavailableReason: "Couldn't match this division to a bill.",
+    );
+  }
 
   Future<List<BoundaryPolygon>> fetchConstituencyBoundaries() =>
       _boundaryService.loadBoundaries(BoundaryType.constituency);
@@ -420,8 +537,15 @@ class ParliamentaryDataService {
   Future<Map<String, dynamic>?> fetchMemberBiography(int id) =>
       _membersApi.fetchMemberBiography(id);
 
-  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) =>
-      _hansardApi.fetchMemberContributions(memberId);
+  /// One page of a member's spoken contributions, newest first, with the
+  /// total on record.
+  Future<({List<Map<String, dynamic>> items, int total})>
+      fetchMemberContributions(int memberId, {int skip = 0, int take = 20}) =>
+          _hansardApi.fetchMemberContributions(
+            memberId,
+            skip: skip,
+            take: take,
+          );
 
   Future<List<Map<String, dynamic>>> fetchMemberVoting(
     int memberId, {
@@ -750,6 +874,7 @@ class ParliamentaryDataService {
     _hansardApi.dispose();
     _liveApi.dispose();
     _billsApi.dispose();
+    _lordsVotesApi.dispose();
     _boundaryService.dispose();
     _councilControlService.dispose();
     _councillorService.dispose();

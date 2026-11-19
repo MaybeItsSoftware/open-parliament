@@ -1,54 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/amendment.dart';
 import '../models/member.dart';
+import '../models/member_contribution.dart';
 import '../services/parliamentary_data_service.dart';
-
-/// A recent Hansard contribution fetched from the search API.
-class MemberContribution {
-  final String debateTitle;
-  final String debateSectionId;
-  final DateTime sittingDate;
-  final String house;
-  final String text;
-
-  const MemberContribution({
-    required this.debateTitle,
-    required this.debateSectionId,
-    required this.sittingDate,
-    required this.house,
-    required this.text,
-  });
-
-  factory MemberContribution.fromJson(Map<String, dynamic> json) {
-    final rawDate = (json['SittingDate'] as String?) ?? '';
-    final date = DateTime.tryParse(rawDate) ?? DateTime(1970);
-    final rawText = (json['Contribution'] as String?) ?? '';
-    return MemberContribution(
-      debateTitle: (json['DebateSection'] as String?) ?? '',
-      debateSectionId: (json['DebateSectionExtId'] as String?) ??
-          (json['DebateSectionId'] as String?) ??
-          '',
-      sittingDate: DateTime(date.year, date.month, date.day),
-      house: (json['House'] as String?) ?? '',
-      text: _stripHtml(rawText),
-    );
-  }
-
-  static String _stripHtml(String html) {
-    return html
-        .replaceAll(RegExp(r'<[^>]+>'), '')
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&mdash;', '—')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll(RegExp(r'\s{2,}'), ' ')
-        .trim();
-  }
-}
+import '../utils/amendment_ref.dart';
 
 /// How a member was recorded in a division.
 enum VotePosition { aye, no, teller, absent }
@@ -133,10 +90,12 @@ class MemberViewModel extends ChangeNotifier {
   DateTime? _membershipStartDate;
   LatLng? _constituencyLatLng;
   List<MemberContribution> _contributions = const [];
+  int _contributionsTotal = 0;
   List<BiographyPost> _governmentPosts = const [];
   List<BiographyPost> _oppositionPosts = const [];
   final List<MemberVote> _votes = [];
   final Map<String, int?> _voteGroupBillIds = {};
+  final Map<int, Future<DivisionAmendment>> _amendments = {};
 
   // Voting history is paged (20 per API page, 1-indexed) and loaded lazily as
   // the profile is scrolled.
@@ -153,7 +112,15 @@ class MemberViewModel extends ChangeNotifier {
   int? get house => _house;
   DateTime? get membershipStartDate => _membershipStartDate;
   LatLng? get constituencyLatLng => _constituencyLatLng;
+  /// The few most recent speeches shown on the profile; the full, paged list
+  /// lives on its own screen (`MemberSpeechesView`).
   List<MemberContribution> get contributions => _contributions;
+
+  /// How many spoken contributions Hansard holds for this member.
+  int get contributionsTotal => _contributionsTotal;
+
+  /// Speeches previewed on the profile before "All speeches".
+  static const int contributionsPreviewCount = 5;
   List<BiographyPost> get governmentPosts => _governmentPosts;
   List<BiographyPost> get oppositionPosts => _oppositionPosts;
   List<MemberVote> get votes => List.unmodifiable(_votes);
@@ -193,6 +160,30 @@ class MemberViewModel extends ChangeNotifier {
     return id;
   }
 
+  /// Whether tapping [vote] can show what was voted on. Lords divisions
+  /// always carry motion notes; Commons ones only when the title names a
+  /// numbered amendment.
+  bool canShowAmendment(MemberVote vote) =>
+      isLord || parseCommonsDivisionTitle(vote.title) != null;
+
+  /// The amendment (and, for the Lords, the motion text) behind [vote].
+  /// Memoised per division; a failed lookup is dropped so it can be retried.
+  Future<DivisionAmendment> amendmentFor(MemberVote vote) {
+    return _amendments.putIfAbsent(vote.divisionId, () async {
+      try {
+        return await _service.fetchDivisionAmendment(
+          divisionId: vote.divisionId,
+          house: _house ?? 1,
+          title: vote.title,
+          date: vote.date,
+        );
+      } catch (_) {
+        _amendments.remove(vote.divisionId);
+        rethrow;
+      }
+    });
+  }
+
   Future<void> load() async {
     _isLoading = true;
     _error = null;
@@ -202,7 +193,10 @@ class MemberViewModel extends ChangeNotifier {
       // Fire all three requests in parallel.
       final detailFuture = _service.fetchMemberDetail(member.id);
       final biographyFuture = _service.fetchMemberBiography(member.id);
-      final contributionsFuture = _service.fetchMemberContributions(member.id);
+      final contributionsFuture = _service.fetchMemberContributions(
+        member.id,
+        take: contributionsPreviewCount,
+      );
 
       final detail = await detailFuture;
       final biography = await biographyFuture;
@@ -230,17 +224,8 @@ class MemberViewModel extends ChangeNotifier {
         );
       }
 
-      _contributions = rawContributions
-          .map((json) {
-            try {
-              return MemberContribution.fromJson(json);
-            } catch (_) {
-              return null;
-            }
-          })
-          .whereType<MemberContribution>()
-          .where((c) => c.debateTitle.isNotEmpty)
-          .toList();
+      _contributions = parseMemberContributions(rawContributions.items);
+      _contributionsTotal = rawContributions.total;
 
       // Voting history is scoped to the member's house; only fetch the first
       // page once the house has been resolved from the detail response.

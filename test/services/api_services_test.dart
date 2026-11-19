@@ -290,6 +290,35 @@ void main() {
   // ─── HansardApiService tests ─────────────────────────────────────────────
 
   group('HansardApiService', () {
+    test('fetchMemberContributions queries Spoken.json and returns total',
+        () async {
+      final client = _CapturingHttpClient(jsonEncode({
+        'TotalResultCount': 1543,
+        'Results': [
+          {'ItemId': 51057832, 'DebateSection': 'Engagements'},
+        ],
+      }));
+      final page = await HansardApiService(client: client)
+          .fetchMemberContributions(172, skip: 40, take: 20);
+
+      expect(page.total, 1543);
+      expect(page.items.single['ItemId'], 51057832);
+      final uri = client.requests.single;
+      expect(uri.path, '/search/contributions/Spoken.json');
+      expect(uri.queryParameters, containsPair('queryParameters.memberId', '172'));
+      expect(uri.queryParameters, containsPair('queryParameters.skip', '40'));
+      expect(uri.queryParameters, containsPair('queryParameters.take', '20'));
+    });
+
+    test('fetchMemberContributions yields an empty page on HTTP error',
+        () async {
+      final page = await HansardApiService(
+        client: _StubHttpClient([_jsonResponse({}, statusCode: 404)]),
+      ).fetchMemberContributions(172);
+      expect(page.items, isEmpty);
+      expect(page.total, 0);
+    });
+
     test('parseDebateSearch maps results and drops incomplete rows', () {
       final body = jsonEncode({
         'Results': [

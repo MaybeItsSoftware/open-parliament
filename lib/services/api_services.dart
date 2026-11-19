@@ -766,20 +766,25 @@ class HansardApiService {
     return dates;
   }
 
-  /// Fetches recent Hansard contributions (speeches) for [memberId].
+  /// Fetches one page of a member's spoken Hansard contributions, newest
+  /// first, via `/search/contributions/Spoken.json`. Works for both Houses.
   ///
-  /// Returns raw JSON result maps, newest first.  Returns an empty list on
-  /// network failure or when no contributions are found.
-  Future<List<Map<String, dynamic>>> fetchMemberContributions(
+  /// Returns the raw result maps plus the total number of contributions on
+  /// record (for "All speeches (1,543)"). An empty page with total 0 on
+  /// failure.
+  Future<({List<Map<String, dynamic>> items, int total})>
+      fetchMemberContributions(
     int memberId, {
+    int skip = 0,
     int take = 20,
   }) async {
-    final uri = Uri.parse(
-      '$_baseUrl/search/contributions.json',
-    ).replace(
+    const empty = (items: <Map<String, dynamic>>[], total: 0);
+    final uri = Uri.parse('$_baseUrl/search/contributions/Spoken.json').replace(
       queryParameters: {
-        'memberId': memberId.toString(),
-        'take': take.toString(),
+        'queryParameters.memberId': memberId.toString(),
+        'queryParameters.skip': skip.toString(),
+        'queryParameters.take': take.toString(),
+        'queryParameters.orderBy': 'SittingDateDesc',
       },
     );
     try {
@@ -787,14 +792,27 @@ class HansardApiService {
         uri,
         headers: {'Accept': 'application/json'},
       );
-      if (response.statusCode != 200) return const [];
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final results = (body['Results'] as List<dynamic>?) ?? [];
-      return results.whereType<Map<String, dynamic>>().toList();
+      if (response.statusCode != 200) return empty;
+      return parseContributionSearch(response.body);
     } catch (e, st) {
       _reportSilentFailure(e, st);
-      return const [];
+      return empty;
     }
+  }
+
+  /// Parses a `/search/contributions/*.json` body. Exposed for tests.
+  static ({List<Map<String, dynamic>> items, int total}) parseContributionSearch(
+    String body,
+  ) {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      return (items: const <Map<String, dynamic>>[], total: 0);
+    }
+    final items = ((decoded['Results'] as List<dynamic>?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final total = (decoded['TotalResultCount'] as num?)?.toInt() ?? items.length;
+    return (items: items, total: total);
   }
 
   void dispose() => _client.close();
@@ -1375,6 +1393,61 @@ class BillsApiService {
     }
   }
 
+  /// Finds the amendment numbered [number] (`"8"`, `"NC62"`) on one bill
+  /// stage's amendment paper, returning its list record (number, type,
+  /// decision, sponsors, two-line `summaryText`) or null. Filtering by number
+  /// server-side matters: a whole committee-stage paper can be hundreds of
+  /// records and take the API tens of seconds to serve.
+  Future<Map<String, dynamic>?> fetchStageAmendment(
+    int billId,
+    int stageId,
+    String number,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/$billId/Stages/$stageId/Amendments')
+        .replace(queryParameters: <String, String>{'AmendmentNumber': number});
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body);
+      final items = body is Map<String, dynamic> ? body['items'] : null;
+      if (items is! List) return null;
+      for (final item in items.whereType<Map<String, dynamic>>()) {
+        final n = (item['marshalledListText'] as String?)?.trim().toUpperCase();
+        if (n == number.toUpperCase()) return item;
+      }
+      return null;
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return null;
+    }
+  }
+
+  /// Fetches one amendment's full record, including its printed
+  /// `amendmentLines`. Null on failure.
+  Future<Map<String, dynamic>?> fetchAmendmentDetail(
+    int billId,
+    int stageId,
+    int amendmentId,
+  ) async {
+    final uri =
+        Uri.parse('$_baseUrl/$billId/Stages/$stageId/Amendments/$amendmentId');
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body);
+      return body is Map<String, dynamic> ? body : null;
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return null;
+    }
+  }
+
   /// Clears in-memory caches for bill search lookups and details. Returns count cleared.
   int clearCache() {
     final count = _cache.length + _billDetailCache.length;
@@ -1383,6 +1456,39 @@ class BillsApiService {
     _billDetailCachedAt.clear();
     _billTypesCache = null;
     return count;
+  }
+
+  void dispose() => _client.close();
+}
+
+/// Low-level HTTP client for the Lords Votes API.
+///
+/// Endpoint: https://lordsvotes-api.parliament.uk/data/Divisions/{id}
+class LordsVotesApiService {
+  static const String _baseUrl = 'https://lordsvotes-api.parliament.uk/data';
+
+  final http.Client _client;
+
+  LordsVotesApiService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  /// Fetches one Lords division. Its `amendmentMotionNotes` (HTML) records
+  /// who moved what — e.g. "Baroness X moved amendment 16, … to insert “…”".
+  /// Null on failure.
+  Future<Map<String, dynamic>?> fetchDivision(int id) async {
+    final uri = Uri.parse('$_baseUrl/Divisions/$id');
+    try {
+      final response = await _client.getTimed(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body);
+      return body is Map<String, dynamic> ? body : null;
+    } catch (e, st) {
+      _reportSilentFailure(e, st);
+      return null;
+    }
   }
 
   void dispose() => _client.close();

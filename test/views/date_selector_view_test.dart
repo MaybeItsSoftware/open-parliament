@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:open_parliament/models/amendment.dart';
 import 'package:open_parliament/models/boundary.dart';
 import 'package:open_parliament/models/council.dart';
 import 'package:open_parliament/models/councillor.dart';
@@ -202,8 +203,18 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   Future<Map<String, dynamic>?> fetchMemberBiography(int id) async => null;
 
   @override
-  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) async =>
-      const [];
+  Future<({List<Map<String, dynamic>> items, int total})>
+      fetchMemberContributions(int memberId, {int skip = 0, int take = 20}) async =>
+          (items: const <Map<String, dynamic>>[], total: 0);
+
+  @override
+  Future<DivisionAmendment> fetchDivisionAmendment({
+    required int divisionId,
+    required int house,
+    required String title,
+    required DateTime date,
+  }) async =>
+      const DivisionAmendment();
 
   @override
   Future<List<Map<String, dynamic>>> fetchMemberVoting(

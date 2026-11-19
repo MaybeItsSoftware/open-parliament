@@ -11,15 +11,17 @@ import '../services/parliamentary_data_service.dart';
 import '../utils/map_tiles.dart';
 import '../utils/party_colors.dart' as party_util;
 import '../viewmodels/member_viewmodel.dart';
+import '../widgets/amendment_sheet.dart';
+import '../widgets/contribution_tile.dart';
 import 'bill_view.dart';
 import 'constituency_view.dart';
-import 'transcript_view.dart';
+import 'member_speeches_view.dart';
 import 'party_view.dart';
 
 /// Profile page for a single parliamentary member.
 ///
 /// Shows portrait, party, constituency, constituency map (Commons MPs),
-/// posts held, and recent Hansard contributions.
+/// posts held, recent speeches (→ the full list) and the voting record.
 class MemberView extends StatefulWidget {
   final Member member;
 
@@ -118,18 +120,23 @@ class _MemberViewState extends State<MemberView> {
                     ),
                   if (vm.contributions.isNotEmpty) ...[
                     SliverToBoxAdapter(
-                      child: _sectionHeader(context, 'Recent Contributions'),
+                      child: _sectionHeader(context, 'Recent Speeches'),
                     ),
                     SliverList(
                       delegate: SliverChildBuilderDelegate(
-                        (context, i) => _buildContributionTile(
-                          context,
-                          vm.contributions[i],
-                          pColor,
+                        (context, i) => ContributionTile(
+                          contribution: vm.contributions[i],
+                          accentColor: pColor,
+                          onTap: () =>
+                              openContribution(context, vm.contributions[i]),
                         ),
                         childCount: vm.contributions.length,
                       ),
                     ),
+                    if (vm.contributionsTotal > vm.contributions.length)
+                      SliverToBoxAdapter(
+                        child: _buildAllSpeechesRow(context, vm),
+                      ),
                   ],
                   if (vm.votes.isNotEmpty) ...[
                     SliverToBoxAdapter(
@@ -566,49 +573,32 @@ class _MemberViewState extends State<MemberView> {
     );
   }
 
-  Widget _buildContributionTile(
-    BuildContext context,
-    MemberContribution contrib,
-    Color pColor,
-  ) {
+  Widget _buildAllSpeechesRow(BuildContext context, MemberViewModel vm) {
     final theme = Theme.of(context);
-    final dateStr =
-        '${contrib.house} · ${_formatDate(contrib.sittingDate)}';
-
+    final total = vm.contributionsTotal.toString().replaceAllMapped(
+          RegExp(r'\B(?=(\d{3})+(?!\d))'),
+          (_) => ',',
+        );
     return InkWell(
-      onTap: () => _openTranscript(context, contrib.sittingDate),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => MemberSpeechesView(member: vm.member),
+        ),
+      ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.fromLTRB(16, 4, 12, 12),
+        child: Row(
           children: [
-            Text(
-              contrib.debateTitle,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              dateStr,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: pColor,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            if (contrib.text.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                contrib.text,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+            Expanded(
+              child: Text(
+                'All speeches ($total)',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
-            ],
-            const Divider(height: 20),
+            ),
+            Icon(Icons.chevron_right, color: theme.colorScheme.primary),
           ],
         ),
       ),
@@ -643,7 +633,7 @@ class _MemberViewState extends State<MemberView> {
             _VoteHeaderRow(:final group) =>
             _buildVoteGroupHeader(context, vm, group),
             _VoteEntryRow(:final vote, :final isLast) =>
-              _buildVoteRow(context, vote, showDivider: !isLast),
+              _buildVoteRow(context, vm, vote, showDivider: !isLast),
           };
         },
         childCount: rows.length,
@@ -711,6 +701,7 @@ class _MemberViewState extends State<MemberView> {
 
   Widget _buildVoteRow(
     BuildContext context,
+    MemberViewModel vm,
     MemberVote vote, {
     required bool showDivider,
   }) {
@@ -736,7 +727,8 @@ class _MemberViewState extends State<MemberView> {
         ? '${_formatDate(vote.date)} · $result'
         : _formatDate(vote.date);
 
-    return Padding(
+    final tappable = vm.canShowAmendment(vote);
+    final row = Padding(
       padding: const EdgeInsets.fromLTRB(34, 8, 16, 0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -785,9 +777,51 @@ class _MemberViewState extends State<MemberView> {
               ],
             ),
           ),
+          if (tappable)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 2),
+              child: Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
         ],
       ),
     );
+    if (!tappable) return row;
+    return InkWell(
+      onTap: () => _openAmendment(context, vm, vote, meta),
+      child: row,
+    );
+  }
+
+  void _openAmendment(
+    BuildContext context,
+    MemberViewModel vm,
+    MemberVote vote,
+    String meta,
+  ) {
+    final position = switch (vote.position) {
+      VotePosition.aye => 'Voted Aye',
+      VotePosition.no => 'Voted No',
+      VotePosition.teller => 'Teller',
+      VotePosition.absent => 'Did not vote',
+    };
+    unawaited(showAmendmentSheet(
+      context,
+      title: vote.title,
+      subtitle: '$meta · $position',
+      future: vm.amendmentFor(vote),
+      onOpenBill: (billId) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => BillView(
+            billTitle: vote.title.split(':').first.trim(),
+            billId: billId,
+          ),
+        ),
+      ),
+    ));
   }
 
   // ─── Error state ──────────────────────────────────────────────────────────
@@ -836,19 +870,6 @@ class _MemberViewState extends State<MemberView> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PartyView(partyName: partyName),
-      ),
-    );
-  }
-
-  void _openTranscript(BuildContext context, DateTime date) {
-    final dateStr =
-        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TranscriptView(
-          date: dateStr,
-          displayDate: _formatDate(date),
-        ),
       ),
     );
   }

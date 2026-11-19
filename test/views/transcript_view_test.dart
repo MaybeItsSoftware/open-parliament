@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:open_parliament/models/amendment.dart';
 import 'package:open_parliament/models/boundary.dart';
 import 'package:open_parliament/models/council.dart';
 import 'package:open_parliament/models/councillor.dart';
@@ -34,12 +35,27 @@ class _FakeTranscriptDataService implements ParliamentaryDataService {
   final String debateTitle;
   int? billIdToReturn = 1234;
 
+  /// Further named speeches (ids `s2`…) appended after the first.
+  final int extraSpeeches;
+
   _FakeTranscriptDataService({
     this.debateTitle = 'Renters (Reform) Bill: Second Reading',
+    this.extraSpeeches = 0,
   });
 
   @override
   Future<List<Speech>> getSpeeches(String date) async => [
+        for (var i = 2; i < 2 + extraSpeeches; i++)
+          Speech(
+            id: 's$i',
+            debateId: 'd1',
+            debateTitle: debateTitle,
+            memberId: 1,
+            memberName: 'Alice',
+            attributedTo: 'Alice (Lab)',
+            speechText: 'Numbered contribution $i. ${'Words ' * 40}',
+            orderIndex: i,
+          ),
         Speech(
           id: 's1',
           debateId: 'd1',
@@ -202,7 +218,18 @@ class _FakeTranscriptDataService implements ParliamentaryDataService {
   Future<Map<String, dynamic>?> fetchMemberBiography(int id) async => null;
 
   @override
-  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) async => const [];
+  Future<({List<Map<String, dynamic>> items, int total})>
+      fetchMemberContributions(int memberId, {int skip = 0, int take = 20}) async =>
+          (items: const <Map<String, dynamic>>[], total: 0);
+
+  @override
+  Future<DivisionAmendment> fetchDivisionAmendment({
+    required int divisionId,
+    required int house,
+    required String title,
+    required DateTime date,
+  }) async =>
+      const DivisionAmendment();
 
   @override
   Future<List<Map<String, dynamic>>> fetchMemberVoting(int memberId, {int house = 1, int page = 1}) async => const [];
@@ -281,5 +308,38 @@ void main() {
 
     expect(find.text('Transcript'), findsNothing);
     expect(find.byType(BillDetailPane), findsNothing);
+  });
+
+  testWidgets('initialSpeechId scrolls the transcript to that speech',
+      (tester) async {
+    final fakeService = _FakeTranscriptDataService(
+      debateTitle: 'Oral Answers to Questions: Foreign Affairs',
+      extraSpeeches: 60,
+    );
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ThemeService()),
+          Provider<ParliamentaryDataService>.value(value: fakeService),
+        ],
+        child: const MaterialApp(
+          home: TranscriptView(
+            date: '2024-11-04',
+            displayDate: 'Monday, 4 November 2024',
+            initialSpeechId: 's50',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Numbered contribution 50.', findRichText: true),
+        findsOneWidget);
+    expect(find.textContaining('Numbered contribution 2.', findRichText: true),
+        findsNothing);
+
+    // Let the highlight timer run out so no timer is left pending.
+    await tester.pump(const Duration(seconds: 5));
   });
 }

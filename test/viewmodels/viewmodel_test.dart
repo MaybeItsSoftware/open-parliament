@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open_parliament/models/amendment.dart';
 import 'package:open_parliament/models/boundary.dart';
 import 'package:open_parliament/models/council.dart';
 import 'package:open_parliament/models/councillor.dart';
@@ -20,6 +21,7 @@ import 'package:open_parliament/viewmodels/constituency_viewmodel.dart';
 import 'package:open_parliament/viewmodels/council_history_viewmodel.dart';
 import 'package:open_parliament/viewmodels/date_selector_viewmodel.dart';
 import 'package:open_parliament/viewmodels/house_seating_viewmodel.dart';
+import 'package:open_parliament/viewmodels/member_speeches_viewmodel.dart';
 import 'package:open_parliament/viewmodels/member_viewmodel.dart';
 import 'package:open_parliament/viewmodels/search_viewmodel.dart';
 import 'package:open_parliament/viewmodels/transcript_viewmodel.dart';
@@ -283,9 +285,28 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
   @override
   Future<Map<String, dynamic>?> fetchMemberBiography(int id) async => null;
 
+  /// All contributions "on record"; pages are sliced from it by skip/take.
+  List<Map<String, dynamic>> memberContributionsResult = const [];
+  final List<(int, int)> contributionRequests = [];
+
   @override
-  Future<List<Map<String, dynamic>>> fetchMemberContributions(int memberId) async =>
-      const [];
+  Future<({List<Map<String, dynamic>> items, int total})>
+      fetchMemberContributions(int memberId, {int skip = 0, int take = 20}) async {
+    contributionRequests.add((skip, take));
+    final all = memberContributionsResult;
+    final start = skip.clamp(0, all.length);
+    final end = (skip + take).clamp(0, all.length);
+    return (items: all.sublist(start, end), total: all.length);
+  }
+
+  @override
+  Future<DivisionAmendment> fetchDivisionAmendment({
+    required int divisionId,
+    required int house,
+    required String title,
+    required DateTime date,
+  }) async =>
+      const DivisionAmendment();
 
   @override
   Future<List<Map<String, dynamic>>> fetchMemberVoting(
@@ -2014,6 +2035,67 @@ void main() {
   });
 
   // ─── MemberViewModel tests ────────────────────────────────────────────────
+
+  group('member speeches', () {
+    late _FakeParliamentaryDataService fakeService;
+    const member = Member(
+      id: 1,
+      name: 'Alice',
+      party: 'Labour',
+      partyAbbreviation: 'Lab',
+    );
+
+    Map<String, dynamic> speech(int i) => {
+          'ItemId': 1000 + i,
+          'DebateSection': 'Debate $i',
+          'DebateSectionExtId': 'D$i',
+          'SittingDate': '2026-11-01T00:00:00',
+          'House': 'Commons',
+          'ContributionTextFull': 'Speech $i',
+        };
+
+    setUp(() {
+      fakeService = _FakeParliamentaryDataService()
+        ..memberContributionsResult = [for (var i = 0; i < 45; i++) speech(i)];
+    });
+
+    test('profile loads a short preview and the total', () async {
+      final vm = MemberViewModel(fakeService, member: member);
+      await vm.load();
+      expect(vm.contributions, hasLength(MemberViewModel.contributionsPreviewCount));
+      expect(vm.contributions.first.speechId, '1000');
+      expect(vm.contributionsTotal, 45);
+      expect(fakeService.contributionRequests.single,
+          (0, MemberViewModel.contributionsPreviewCount));
+    });
+
+    test('MemberSpeechesViewModel pages until the total is reached', () async {
+      final vm = MemberSpeechesViewModel(fakeService, member: member);
+      await vm.refresh();
+      expect(vm.speeches, hasLength(20));
+      expect(vm.total, 45);
+      expect(vm.hasMore, isTrue);
+
+      await vm.loadMore();
+      await vm.loadMore();
+      expect(vm.speeches, hasLength(45));
+      expect(vm.hasMore, isFalse);
+      expect(fakeService.contributionRequests, [(0, 20), (20, 20), (40, 20)]);
+
+      await vm.loadMore(); // exhausted: no further request
+      expect(fakeService.contributionRequests, hasLength(3));
+    });
+
+    test('MemberSpeechesViewModel reports failure when nothing loads',
+        () async {
+      fakeService.memberContributionsResult = const [];
+      final vm = MemberSpeechesViewModel(fakeService, member: member);
+      await vm.refresh();
+      expect(vm.speeches, isEmpty);
+      expect(vm.failed, isTrue);
+      expect(vm.hasMore, isFalse);
+    });
+  });
 
   group('MemberViewModel', () {
     late _FakeParliamentaryDataService fakeService;
