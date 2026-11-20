@@ -19,6 +19,9 @@ class NormalisedTranscript {
 ///
 /// Rules applied:
 ///  - Timestamp rows are stripped; their clock value becomes an anchor.
+///  - A contribution's own Hansard `Timecode` also becomes an anchor at its
+///    position. These are noisy (stale repeats, values from earlier in the
+///    day), so the anchors are cleaned by [cleanTimeAnchors] before use.
 ///  - Date-heading rows are dropped.
 ///  - Repeated procedural headings (back-to-back duplicates) are collapsed.
 ///  - "Date phrases" matching the sitting [date] are dropped as redundant.
@@ -114,12 +117,95 @@ NormalisedTranscript normaliseSpeeches({
       lastProceduralNormalized = null;
     }
 
+    final ownSeconds = speech.timecode == null
+        ? null
+        : parseTimecodeToSeconds(speech.timecode!);
+    if (ownSeconds != null) {
+      anchors.add(
+        TimeAnchor(
+          index: displayIndex.toDouble(),
+          secondsSinceMidnight: ownSeconds,
+        ),
+      );
+    }
     result.add(speech);
     displayIndex++;
     i++;
   }
 
-  return NormalisedTranscript(speeches: result, anchors: anchors);
+  return NormalisedTranscript(
+    speeches: result,
+    anchors: cleanTimeAnchors(anchors),
+  );
+}
+
+/// Reduces raw [anchors] (in transcript order) to a strictly increasing
+/// timeline that interpolation can trust.
+///
+/// Hansard's per-contribution timecodes include stale values — a run of
+/// speeches all stamped with a time from an hour earlier, or one placeholder
+/// repeated down a whole exchange. Time only moves forward through a sitting,
+/// so this keeps the longest run of anchors whose times strictly increase and
+/// drops the rest; a repeated time keeps only its first occurrence. Times
+/// after midnight in a late sitting are carried past 24h so they still count
+/// as later (formatting wraps them back).
+List<TimeAnchor> cleanTimeAnchors(List<TimeAnchor> anchors) {
+  if (anchors.length < 2) return anchors;
+
+  // One anchor per position: the last one written there wins.
+  final byIndex = <TimeAnchor>[];
+  for (final a in anchors) {
+    if (byIndex.isNotEmpty && byIndex.last.index == a.index) {
+      byIndex[byIndex.length - 1] = a;
+    } else {
+      byIndex.add(a);
+    }
+  }
+
+  // Carry small-hours times past midnight once the sitting has reached the
+  // evening, so a Lords sitting running to 1am stays in order.
+  const day = 24 * 3600;
+  var sawEvening = false;
+  final unwrapped = <TimeAnchor>[];
+  for (final a in byIndex) {
+    var s = a.secondsSinceMidnight;
+    if (s >= 18 * 3600) sawEvening = true;
+    if (sawEvening && s < 6 * 3600) s += day;
+    unwrapped.add(TimeAnchor(index: a.index, secondsSinceMidnight: s));
+  }
+
+  // Longest strictly increasing subsequence by time (patience sorting).
+  final n = unwrapped.length;
+  final tails = <int>[]; // tails[k]: index of the smallest tail of length k+1
+  final prev = List<int>.filled(n, -1);
+  for (var i = 0; i < n; i++) {
+    final t = unwrapped[i].secondsSinceMidnight;
+    var lo = 0, hi = tails.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (unwrapped[tails[mid]].secondsSinceMidnight < t) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    // An equal time already ends a run of this length: keep that earlier
+    // occurrence rather than the repeat.
+    if (lo < tails.length && unwrapped[tails[lo]].secondsSinceMidnight == t) {
+      continue;
+    }
+    if (lo > 0) prev[i] = tails[lo - 1];
+    if (lo == tails.length) {
+      tails.add(i);
+    } else {
+      tails[lo] = i;
+    }
+  }
+  final kept = <TimeAnchor>[];
+  for (var k = tails.isEmpty ? -1 : tails.last; k != -1; k = prev[k]) {
+    kept.add(unwrapped[k]);
+  }
+  return kept.reversed.toList();
 }
 
 class _MergedProceduralBlock {

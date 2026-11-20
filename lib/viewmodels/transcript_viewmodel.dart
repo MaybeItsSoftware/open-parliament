@@ -208,22 +208,11 @@ class TranscriptViewModel extends ChangeNotifier {
     return estimatedTimeAtPosition(index.toDouble());
   }
 
-  /// Best available Hansard timecode (`HH:MM:SS`) for deep-linking the
-  /// currently loaded transcript to parliamentlive.tv.
-  ///
-  /// Prefers explicit `Speech.timecode` values from Hansard rows, then falls
-  /// back to timestamp-derived anchors when explicit per-speech timecodes are
-  /// absent.
+  /// Hansard timecode (`HH:MM:SS`) for deep-linking the currently loaded
+  /// transcript to parliamentlive.tv: the cleaned timeline's time at its
+  /// first speech. Raw per-speech `Timecode`s are not read directly — they
+  /// can be stale — but feed that timeline (see `cleanTimeAnchors`).
   String? get parliamentLiveStartTimecode {
-    for (final speech in _speeches) {
-      final raw = speech.timecode;
-      if (raw == null || raw.trim().isEmpty) continue;
-      final seconds = parseTimecodeToSeconds(raw);
-      if (seconds != null) {
-        return formatSecondsAsTimecode(seconds);
-      }
-    }
-
     final anchoredSeconds = interpolateSecondsAtPosition(_timeAnchors, 0);
     if (anchoredSeconds == null) return null;
     return formatSecondsAsTimecode(anchoredSeconds);
@@ -232,26 +221,15 @@ class TranscriptViewModel extends ChangeNotifier {
   /// Debate-specific Hansard timecode (`HH:MM:SS`) for parliamentlive deep-linking.
   ///
   /// When [debateTitle] is provided, this scopes lookup to that debate's first
-  /// matching speech in the loaded transcript so chamber-wide videos shared by
+  /// speech in the loaded transcript so chamber-wide videos shared by
   /// multiple debates start at the right point.
   String? parliamentLiveStartTimecodeForDebateTitle(String? debateTitle) {
     final target = debateTitle?.trim();
     if (target == null || target.isEmpty) return parliamentLiveStartTimecode;
 
-    int? firstMatchIndex;
-    for (int i = 0; i < _speeches.length; i++) {
-      final speech = _speeches[i];
-      if (speech.debateTitle.trim() != target) continue;
-      firstMatchIndex ??= i;
-      final raw = speech.timecode;
-      if (raw == null || raw.trim().isEmpty) continue;
-      final seconds = parseTimecodeToSeconds(raw);
-      if (seconds != null) {
-        return formatSecondsAsTimecode(seconds);
-      }
-    }
-
-    if (firstMatchIndex == null) return parliamentLiveStartTimecode;
+    final firstMatchIndex =
+        _speeches.indexWhere((s) => s.debateTitle.trim() == target);
+    if (firstMatchIndex < 0) return parliamentLiveStartTimecode;
     final anchoredSeconds =
         interpolateSecondsAtPosition(_timeAnchors, firstMatchIndex.toDouble());
     if (anchoredSeconds == null) return null;
@@ -314,16 +292,12 @@ class TranscriptViewModel extends ChangeNotifier {
   /// Best available Hansard timecode (`HH:MM:SS`) for the speech at [index]
   /// in [speeches], used to deep-link that speech into parliamentlive.tv.
   ///
-  /// Prefers the speech's own explicit `Timecode`, then falls back to an
-  /// estimate interpolated from the transcript's time anchors. Returns `null`
-  /// when [index] is out of range or no time can be derived.
+  /// Read off the cleaned timeline — exact where the speech's own timecode
+  /// survived cleaning, interpolated otherwise — so it always matches the
+  /// time label shown beside the speech. Returns `null` when [index] is out
+  /// of range or no time can be derived.
   String? parliamentLiveTimecodeForSpeechIndex(int index) {
     if (index < 0 || index >= _speeches.length) return null;
-    final raw = _speeches[index].timecode;
-    if (raw != null && raw.trim().isNotEmpty) {
-      final seconds = parseTimecodeToSeconds(raw);
-      if (seconds != null) return formatSecondsAsTimecode(seconds);
-    }
     final anchoredSeconds =
         interpolateSecondsAtPosition(_timeAnchors, index.toDouble());
     if (anchoredSeconds == null) return null;
