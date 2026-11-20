@@ -8,15 +8,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:open_parliament/models/amendment.dart';
 import 'package:open_parliament/models/member.dart';
 import 'package:open_parliament/services/parliamentary_data_service.dart';
 import 'package:open_parliament/services/party_service.dart';
 import 'package:open_parliament/services/saved_speeches_service.dart';
 import 'package:open_parliament/services/startup_prefetch_service.dart';
 import 'package:open_parliament/services/theme_service.dart';
+import 'package:open_parliament/utils/amendment_diff.dart';
+import 'package:open_parliament/viewmodels/member_viewmodel.dart';
 import 'package:open_parliament/views/home_shell.dart';
 import 'package:open_parliament/views/member_view.dart';
 import 'package:open_parliament/views/transcript_view.dart';
+import 'package:open_parliament/widgets/amendment_sheet.dart';
 
 /// Human-readable date like "Monday, 6 July 2026" — matches the format used
 /// throughout the real app (see DateSelectorView._friendlyDate).
@@ -107,6 +111,130 @@ Future<_HeroContent> _loadHeroContent(ParliamentaryDataService service) async {
     heroMember: heroMember ??
         const Member(id: 0, name: 'Unknown', party: '', partyAbbreviation: ''),
   );
+}
+
+/// A real vote whose amendment makes a good diff screenshot: wording both
+/// struck out and inserted, from an MP's own voting record.
+class _AmendmentShowcase {
+  final Member member;
+  final String title;
+  final String subtitle;
+  final DivisionAmendment amendment;
+
+  const _AmendmentShowcase({
+    required this.member,
+    required this.title,
+    required this.subtitle,
+    required this.amendment,
+  });
+}
+
+/// Walks the voting records of [candidates] (MPs) for the amendment that
+/// best shows off the diff: wording both struck out and inserted, and enough
+/// lines to fill the sheet. Scans a bounded number of votes and keeps the
+/// best-scoring one, stopping early once one is clearly good enough.
+Future<_AmendmentShowcase?> _findAmendmentShowcase(
+  ParliamentaryDataService service,
+  List<Member> candidates,
+) async {
+  _AmendmentShowcase? best;
+  var bestScore = -1;
+  var tried = 0;
+  for (final member in candidates.take(8)) {
+    if (tried >= 15 || bestScore >= 110) break;
+    final vm = MemberViewModel(service, member: member);
+    try {
+      await vm.load();
+      if (vm.isLord) continue;
+      for (var page = 0; page < 3 && vm.hasMoreVotes; page++) {
+        await vm.loadMoreVotes();
+      }
+      for (final vote in vm.votes.where(vm.canShowAmendment).take(10)) {
+        if (tried >= 15) break;
+        tried++;
+        final DivisionAmendment found;
+        try {
+          found = await vm.amendmentFor(vote);
+        } catch (_) {
+          continue;
+        }
+        final a = found.amendment;
+        if (a == null || a.lines.isEmpty) continue;
+        final ops = {
+          for (final line in segmentAmendment([for (final l in a.lines) l.text]))
+            for (final seg in line) seg.op,
+        };
+        final both = ops.contains(DiffOp.deleted) && ops.contains(DiffOp.inserted);
+        // Both kinds of change matter most; then length, up to what fits.
+        final score = (both ? 100 : 0) + a.lines.length.clamp(0, 10);
+        if (score <= bestScore) continue;
+        bestScore = score;
+        best = _AmendmentShowcase(
+          member: member,
+          title: vote.title,
+          subtitle: '${_friendlyDate(vote.date)} · '
+              '${vote.position == VotePosition.no ? 'Voted No' : 'Voted Aye'}',
+          amendment: found,
+        );
+      }
+    } finally {
+      vm.dispose();
+    }
+  }
+  return best;
+}
+
+/// The amendment sheet as it opens over a member's profile.
+class _AmendmentScreen extends StatelessWidget {
+  final _AmendmentShowcase showcase;
+
+  const _AmendmentScreen({required this.showcase});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Stack(
+      children: [
+        MemberView(member: showcase.member),
+        const Positioned.fill(child: ColoredBox(color: Colors.black54)),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: FractionallySizedBox(
+            heightFactor: 0.6,
+            child: Material(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(28)),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 22),
+                    child: Container(
+                      width: 32,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: AmendmentSheet(
+                      title: showcase.title,
+                      subtitle: showcase.subtitle,
+                      future: Future.value(showcase.amendment),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class ScreenshotTarget {
@@ -361,38 +489,41 @@ class _PitchFrame extends StatelessWidget {
   }
 }
 
+/// Screenshots per device. App Store allows 10, Play 8.
+const int _screenCount = 7;
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   final targets = [
     // --- iOS (deliver) ---
     // 6.7" iPhone (iPhone 14/15/16 Pro Max) - en-GB (using logical size to render correctly)
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone67_$i', width: 430, height: 932, pixelRatio: 3.0),
 
     // 6.1" iPhone (iPhone 12/13/14/15/16 Pro) - en-GB
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone61_$i', width: 390, height: 844, pixelRatio: 3.0),
 
     // 6.5" iPhone (iPhone 12/13 Pro Max, 14 Plus) - en-GB
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/screenshots/en-GB/iphone65_$i', width: 428, height: 926, pixelRatio: 3.0),
 
     // 12.9" iPad Pro - en-GB
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/screenshots/en-GB/ipadPro129_$i', width: 1024, height: 1366, pixelRatio: 2.0),
 
     // --- Android (supply) ---
     // Phone - en-GB (1080x1920, exact 9:16)
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/metadata/android/en-GB/images/phoneScreenshots/$i', width: 360, height: 640, pixelRatio: 3.0),
 
     // 7" Tablet - en-GB (1620x2880, exact 9:16)
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/metadata/android/en-GB/images/sevenInchScreenshots/$i', width: 810, height: 1440, pixelRatio: 2.0),
 
     // 10" Tablet - en-GB (2160x3840, exact 9:16)
-    for (var i = 1; i <= 6; i++)
+    for (var i = 1; i <= _screenCount; i++)
       ScreenshotTarget(path: 'fastlane/metadata/android/en-GB/images/tenInchScreenshots/$i', width: 1080, height: 1920, pixelRatio: 2.0),
 
     // Feature graphic - en-GB (1024x500, required exact size, no upscaling)
@@ -424,6 +555,23 @@ void main() {
     ]);
     print('--- Hero debate: ${hero.heroDebateId} on ${hero.dateKey}, '
         'member: ${hero.heroMember.name} ---');
+
+    // Speakers in the hero debate first, then the wider roster.
+    final debateSpeakers = <Member>[];
+    for (final s in await service.getSpeeches(hero.dateKey)) {
+      if (s.debateId != hero.heroDebateId || s.memberId == null) continue;
+      if (debateSpeakers.any((m) => m.id == s.memberId)) continue;
+      final m = await service.getMemberById(s.memberId!);
+      if (m != null) debateSpeakers.add(m);
+    }
+    final showcase = await _findAmendmentShowcase(service, [
+      ...debateSpeakers,
+      ...(await service.getMembers()).where((m) => m.constituency.isNotEmpty),
+    ]);
+    if (showcase == null) {
+      throw StateError('No vote with amendment text found for the diff shot.');
+    }
+    print('--- Amendment: ${showcase.title} (${showcase.member.name}) ---');
 
     Widget buildApp(Widget home, GlobalKey key) {
       return MultiProvider(
@@ -467,7 +615,7 @@ void main() {
       if (target.path.contains('featureGraphic')) {
         view = const FeatureGraphicView();
       } else {
-        // Same six screens, in the same order, for every device: indexed by
+        // Same seven screens, in the same order, for every device: indexed by
         // the trailing _N (iOS) or /N (Android).
         final index = int.parse(
           RegExp(r'[_/](\d+)$').firstMatch(target.path)!.group(1)!,
@@ -504,11 +652,17 @@ void main() {
             );
           case 4:
             view = frame(
+              'See what they actually voted for',
+              'Every amendment as a diff: wording cut, wording added',
+              _AmendmentScreen(showcase: showcase),
+            );
+          case 5:
+            view = frame(
               'Follow every bill into law',
               'Every stage, all the way to Royal Assent',
               const HomeShell(initialIndex: 2),
             );
-          case 5:
+          case 6:
             view = frame(
               'Find anything in one search',
               'Debates, MPs, bills, constituencies and councils',

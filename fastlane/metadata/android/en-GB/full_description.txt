@@ -11,6 +11,7 @@ READ THE DEBATES
 
 FOLLOW YOUR MP
 • Profiles for every MP and member of the House of Lords, with their recent contributions and voting record
+• Tap a vote to see the amendment behind it as a clear diff: wording struck out in red, new wording in green
 • Constituency pages with the latest general election result, majority, turnout and vote share
 • See the current make-up of each House on a seating chart
 
