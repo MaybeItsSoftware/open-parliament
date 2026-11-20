@@ -36,9 +36,23 @@ class ConstituencyView extends StatefulWidget {
 class _ConstituencyViewState extends State<ConstituencyView> {
   late final ConstituencyViewModel _vm;
 
+  /// The seat's outline: as handed in by the map, else fetched here so the
+  /// page has its map whichever screen opened it.
+  late List<BoundaryPolygon> _boundaries = widget.boundaries;
+
   @override
   void initState() {
     super.initState();
+    if (_boundaries.isEmpty) {
+      unawaited(
+        context
+            .read<ParliamentaryDataService>()
+            .fetchConstituencyBoundary(widget.constituencyName)
+            .then((b) {
+          if (mounted && b.isNotEmpty) setState(() => _boundaries = b);
+        }),
+      );
+    }
     _vm = ConstituencyViewModel(
       context.read<ParliamentaryDataService>(),
       constituencyName: widget.constituencyName,
@@ -98,7 +112,7 @@ class _ConstituencyViewState extends State<ConstituencyView> {
                 ),
                 if (widget.member != null)
                   SliverToBoxAdapter(child: _memberHeader(context, color)),
-                if (widget.boundaries.isNotEmpty)
+                if (_boundaries.isNotEmpty)
                   SliverToBoxAdapter(child: _map(context, color)),
                 if (vm.isLoading)
                   const SliverToBoxAdapter(
@@ -163,7 +177,7 @@ class _ConstituencyViewState extends State<ConstituencyView> {
   // ─── Boundary map ─────────────────────────────────────────────────────────
 
   Widget _map(BuildContext context, Color color) {
-    final points = [for (final b in widget.boundaries) ...b.outer];
+    final points = [for (final b in _boundaries) ...b.outer];
     if (points.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -185,7 +199,7 @@ class _ConstituencyViewState extends State<ConstituencyView> {
               PolygonLayer(
                 simplificationTolerance: 0.5,
                 polygons: [
-                  for (final b in widget.boundaries)
+                  for (final b in _boundaries)
                     Polygon(
                       points: b.outer,
                       holePointsList: b.holes.isNotEmpty ? b.holes : null,

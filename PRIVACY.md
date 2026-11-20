@@ -56,10 +56,9 @@ These third parties process your requests under their own terms and privacy poli
 1. **UK Parliament APIs** (`parliament.uk`): Used to fetch verbatim Hansard debate sections, bills list/detail, and Member profiles.
 2. **OpenCouncilData** (`opencouncildata.co.uk`): Scrapes and downloads council political control tables and councillor listings.
 3. **Democracy Club Candidates API** (`candidates.democracyclub.org.uk`): Used to enrich councillor information with profiles, photos, and contact links.
-4. **Nominatim (OpenStreetMap)** (`openstreetmap.org`): Used to search and geocode constituency names for mapping.
-5. **ONS Open Geography (ArcGIS)**: Used to load constituency and local authority boundary polygons for maps.
-6. **parliamentlive.tv**: Used to scrape broadcast schedules and search for events.
-7. **Embedded WebViews**: When playing video broadcasts, the App loads `parliamentlive.tv` in a system webview. parliamentlive.tv may use cookies or other tracking mechanisms subject to their own policies.
+4. **ONS Open Geography (ArcGIS)**: Used to load constituency and local authority boundary polygons for maps.
+5. **parliamentlive.tv**: Used to scrape broadcast schedules and search for events.
+6. **Embedded WebViews**: When playing video broadcasts, the App loads `parliamentlive.tv` in a system webview. parliamentlive.tv may use cookies or other tracking mechanisms subject to their own policies.
 
 ---
 

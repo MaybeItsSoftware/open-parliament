@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../models/member.dart';
@@ -104,12 +103,11 @@ class _MemberViewState extends State<MemberView> {
                   SliverToBoxAdapter(
                     child: _buildInfoSection(context, vm, pColor),
                   ),
-                  if (vm.constituencyLatLng != null)
+                  if (vm.constituencyBoundaries.isNotEmpty)
                     SliverToBoxAdapter(
                       child: _buildConstituencyMap(
                         context,
-                        vm.constituencyLatLng!,
-                        vm.constituency ?? '',
+                        vm,
                         pColor,
                       ),
                     ),
@@ -429,39 +427,56 @@ class _MemberViewState extends State<MemberView> {
 
   Widget _buildConstituencyMap(
     BuildContext context,
-    LatLng center,
-    String constituencyName,
+    MemberViewModel vm,
     Color pColor,
   ) {
+    final boundaries = vm.constituencyBoundaries;
+    final points = [for (final b in boundaries) ...b.outer];
+    if (points.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
           height: 180,
-          child: FlutterMap(
-            options: MapOptions(
-              initialCenter: center,
-              initialZoom: 10.5,
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.none,
-              ),
-            ),
+          child: Stack(
             children: [
-              buildCartoLightTileLayer(context),
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: center,
-                    width: 40,
-                    height: 40,
-                    child: Icon(
-                      Icons.location_pin,
-                      color: pColor,
-                      size: 40,
-                    ),
+              FlutterMap(
+                options: MapOptions(
+                  initialCameraFit: CameraFit.bounds(
+                    bounds: LatLngBounds.fromPoints(points),
+                    padding: const EdgeInsets.all(24),
+                  ),
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.none,
+                  ),
+                ),
+                children: [
+                  buildCartoLightTileLayer(context),
+                  PolygonLayer(
+                    simplificationTolerance: 0.5,
+                    polygons: [
+                      for (final b in boundaries)
+                        Polygon(
+                          points: b.outer,
+                          holePointsList: b.holes.isNotEmpty ? b.holes : null,
+                          color: pColor.withValues(alpha: 0.35),
+                          borderColor: pColor,
+                          borderStrokeWidth: 1.5,
+                          disableHolesBorder: true,
+                        ),
+                    ],
                   ),
                 ],
+              ),
+              // The map itself takes no gestures; tapping it opens the seat.
+              Positioned.fill(
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: InkWell(
+                    onTap: () => _openConstituency(context, vm),
+                  ),
+                ),
               ),
             ],
           ),
@@ -861,6 +876,7 @@ class _MemberViewState extends State<MemberView> {
         builder: (_) => ConstituencyView(
           constituencyName: name,
           member: vm.member,
+          boundaries: vm.constituencyBoundaries,
         ),
       ),
     );

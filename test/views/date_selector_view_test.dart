@@ -225,8 +225,10 @@ class _FakeParliamentaryDataService implements ParliamentaryDataService {
       const [];
 
   @override
-  Future<List<double>?> geocodeConstituency(String constituencyName) async =>
-      null;
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundary(
+    String constituencyName,
+  ) async =>
+      const [];
 
   @override
   Future<ConstituencyElectionResult?> fetchConstituencyResult(

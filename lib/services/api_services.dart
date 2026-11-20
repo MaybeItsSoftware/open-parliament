@@ -172,42 +172,6 @@ class MembersApiService {
     return members;
   }
 
-  /// Geocodes a UK constituency name to [latitude, longitude] using Nominatim.
-  ///
-  /// Returns `null` on network failure or if the constituency cannot be found.
-  Future<List<double>?> geocodeConstituency(String constituencyName) async {
-    final uri = Uri.parse(
-      'https://nominatim.openstreetmap.org/search',
-    ).replace(
-      queryParameters: {
-        'q': '$constituencyName UK constituency',
-        'format': 'json',
-        'limit': '1',
-        'countrycodes': 'gb',
-      },
-    );
-    try {
-      final response = await _client.getTimed(
-        uri,
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'open-parliament/1.0',
-        },
-      );
-      if (response.statusCode != 200) return null;
-      final body = jsonDecode(response.body) as List<dynamic>;
-      if (body.isEmpty) return null;
-      final first = body.first as Map<String, dynamic>;
-      final lat = double.tryParse((first['lat'] as String?) ?? '');
-      final lon = double.tryParse((first['lon'] as String?) ?? '');
-      if (lat == null || lon == null) return null;
-      return [lat, lon];
-    } catch (e, st) {
-      _reportSilentFailure(e, st);
-      return null;
-    }
-  }
-
   /// Fetches extended detail for a single member (constituency, house, start date).
   ///
   /// Returns the unwrapped `value` object from the API, or null on failure.
@@ -1536,6 +1500,33 @@ class BoundaryApiService {
         // grows but parses off-isolate and renders fine at this count.
         maxAllowableOffset: _constituencyMaxAllowableOffset,
       );
+
+  /// One constituency's outline, matched case-insensitively on its 2024 name,
+  /// as a GeoJSON FeatureCollection. A single small request — unlike the
+  /// national layer — so a profile or constituency page can draw its seat
+  /// without downloading every boundary. `features` is empty when no seat has
+  /// that name.
+  Future<Map<String, dynamic>> fetchConstituencyBoundary(String name) async {
+    final escaped = name.trim().replaceAll("'", "''");
+    final uri = Uri.parse('$_constituencyServiceUrl/0/query').replace(
+      queryParameters: {
+        'where': "UPPER(PCON24NM)=UPPER('$escaped')",
+        'outFields': 'PCON24NM',
+        'returnGeometry': 'true',
+        'f': 'geojson',
+        'outSR': '4326',
+        'geometryPrecision': '5',
+        'maxAllowableOffset': _constituencyMaxAllowableOffset.toString(),
+      },
+    );
+    final response = await _get(uri);
+    if (response.statusCode != 200) {
+      throw BoundaryApiException(
+        'Boundary query failed (${response.statusCode}).',
+      );
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
 
   Future<Map<String, dynamic>> fetchCouncilBoundaries() => _fetchBoundaries(
         _councilServiceUrl,

@@ -235,7 +235,10 @@ class _FakeTranscriptDataService implements ParliamentaryDataService {
   Future<List<Map<String, dynamic>>> fetchMemberVoting(int memberId, {int house = 1, int page = 1}) async => const [];
 
   @override
-  Future<List<double>?> geocodeConstituency(String constituencyName) async => null;
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundary(
+    String constituencyName,
+  ) async =>
+      const [];
 
   @override
   Future<ConstituencyElectionResult?> fetchConstituencyResult(String constituencyName) async => null;

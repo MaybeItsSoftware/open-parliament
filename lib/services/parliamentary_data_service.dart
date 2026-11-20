@@ -554,8 +554,18 @@ class ParliamentaryDataService {
   }) =>
       _membersApi.fetchMemberVoting(memberId, house: house, page: page);
 
-  Future<List<double>?> geocodeConstituency(String constituencyName) =>
-      _membersApi.geocodeConstituency(constituencyName);
+  /// The boundary of one Westminster constituency, by name. Empty when the
+  /// name doesn't match a 2024 seat or the boundary service is unreachable —
+  /// callers simply omit the map.
+  Future<List<BoundaryPolygon>> fetchConstituencyBoundary(
+    String constituencyName,
+  ) async {
+    try {
+      return await _boundaryService.loadConstituencyBoundary(constituencyName);
+    } catch (_) {
+      return const [];
+    }
+  }
 
   /// The latest general-election result for a constituency (by name), or null
   /// when the seat can't be resolved or has no published result.

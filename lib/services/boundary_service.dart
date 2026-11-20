@@ -68,6 +68,29 @@ class BoundaryService {
     );
   }
 
+  final Map<String, Future<List<BoundaryPolygon>>> _constituencyByName = {};
+
+  /// The outline of the constituency named [name] (empty if none matches).
+  /// Fetched on its own rather than from the national cache, which may not be
+  /// downloaded yet; memoised for the session, and a failure is dropped so the
+  /// next page open retries.
+  Future<List<BoundaryPolygon>> loadConstituencyBoundary(String name) {
+    final key = name.trim().toLowerCase();
+    return _constituencyByName.putIfAbsent(key, () async {
+      try {
+        final json = await _api.fetchConstituencyBoundary(name);
+        return parseGeoJsonBoundaries(
+          json,
+          nameKey: _nameKey(BoundaryType.constituency),
+          simplifyTolerance: _simplifyToleranceDegrees,
+        );
+      } catch (_) {
+        _constituencyByName.remove(key);
+        rethrow;
+      }
+    });
+  }
+
   String _nameKey(BoundaryType type) => switch (type) {
         BoundaryType.constituency => 'PCON24NM',
         BoundaryType.council => 'LAD24NM',

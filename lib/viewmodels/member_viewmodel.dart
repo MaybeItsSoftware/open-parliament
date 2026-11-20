@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../models/amendment.dart';
+import '../models/boundary.dart';
 import '../models/member.dart';
 import '../models/member_contribution.dart';
 import '../services/parliamentary_data_service.dart';
@@ -88,7 +88,7 @@ class MemberViewModel extends ChangeNotifier {
   String? _constituency;
   int? _house; // 1 = Commons, 2 = Lords
   DateTime? _membershipStartDate;
-  LatLng? _constituencyLatLng;
+  List<BoundaryPolygon> _constituencyBoundaries = const [];
   List<MemberContribution> _contributions = const [];
   int _contributionsTotal = 0;
   List<BiographyPost> _governmentPosts = const [];
@@ -111,7 +111,9 @@ class MemberViewModel extends ChangeNotifier {
   String? get constituency => _constituency;
   int? get house => _house;
   DateTime? get membershipStartDate => _membershipStartDate;
-  LatLng? get constituencyLatLng => _constituencyLatLng;
+  /// The Commons seat's outline for the profile map; empty for peers or when
+  /// the boundary couldn't be fetched.
+  List<BoundaryPolygon> get constituencyBoundaries => _constituencyBoundaries;
   /// The few most recent speeches shown on the profile; the full, paged list
   /// lives on its own screen (`MemberSpeechesView`).
   List<MemberContribution> get contributions => _contributions;
@@ -224,6 +226,13 @@ class MemberViewModel extends ChangeNotifier {
         );
       }
 
+      // Commons MPs only. Runs alongside the voting-history fetch below.
+      final constituency = _constituency;
+      final boundaryFuture =
+          _house == 1 && constituency != null && constituency.isNotEmpty
+              ? _service.fetchConstituencyBoundary(constituency)
+              : Future.value(const <BoundaryPolygon>[]);
+
       _contributions = parseMemberContributions(rawContributions.items);
       _contributionsTotal = rawContributions.total;
 
@@ -235,13 +244,7 @@ class MemberViewModel extends ChangeNotifier {
       _hasMoreVotes = true;
       await _fetchNextVotesPage();
 
-      // Geocode constituency for Commons MPs only.
-      if (_house == 1 && _constituency != null && _constituency!.isNotEmpty) {
-        final coords = await _service.geocodeConstituency(_constituency!);
-        if (coords != null) {
-          _constituencyLatLng = LatLng(coords[0], coords[1]);
-        }
-      }
+      _constituencyBoundaries = await boundaryFuture;
     } catch (e) {
       _error = e.toString();
     }
