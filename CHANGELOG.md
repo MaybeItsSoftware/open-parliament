@@ -1,3 +1,11 @@
+## [0.11.1](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.11.0...v0.11.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **maps:** draw the real seat outline on MP and constituency pages ([f71e81f](https://github.com/MaybeItsSoftware/open-parliament/commit/f71e81f27eae76d767eb04da64cbc2eb9cf701fa))
+* **transcripts:** build speech times from cleaned Hansard timecodes ([d565e73](https://github.com/MaybeItsSoftware/open-parliament/commit/d565e73f361610031ec6e04b8387d67360969af4))
+
 # [0.11.0](https://github.com/MaybeItsSoftware/open-parliament/compare/v0.10.0...v0.11.0) (2026-11-19)
 
 
